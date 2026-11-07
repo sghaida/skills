@@ -1,0 +1,16 @@
+# Build output
+.build/
+
+# Go test and profiling artifacts
+*.test
+coverage.out
+*.prof
+
+# Local editor and operating-system files
+.DS_Store
+*.swp
+*.swo
+
+# VS Code local workspace files
+.vscode/
+*.code-workspace
