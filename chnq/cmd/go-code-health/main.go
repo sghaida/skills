@@ -111,24 +111,37 @@ func classification(score float64) string {
 }
 
 func writeText(w io.Writer, report Report) {
+	writeTextHeader(w, report)
+	writeTextWarnings(w, report)
+	writeTextHotspots(w, report)
+}
+
+func writeTextHeader(w io.Writer, report Report) {
 	if report.CodeHealthScore == nil {
 		fmt.Fprintf(w, "Code Health: unavailable (%s)\n", report.AnalysisStatus)
 	} else {
 		fmt.Fprintf(w, "Go Code Health: %.1f/10 (%s)\n", *report.CodeHealthScore, report.Classification)
 	}
 	fmt.Fprintf(w, "Analyzed: %d files, %d functions, %d source lines | Score model: %s\n", report.Summary.GoFiles, report.Summary.Functions, report.Summary.SourceLines, report.ScoringVersion)
-	scoreLabel := func(value *float64) string {
-		if value == nil {
-			return "N/A"
-		}
-		return fmt.Sprintf("%.1f", *value)
-	}
 	fmt.Fprintf(w, "Dimensions: Complexity %s | Structure %s | Duplication %s | Coupling %s\n",
 		scoreLabel(report.Dimensions.Complexity), scoreLabel(report.Dimensions.Structure), scoreLabel(report.Dimensions.Duplication), scoreLabel(report.Dimensions.Coupling))
 	fmt.Fprintf(w, "Exact duplicate function tokens: %.1f%%\n", report.Summary.DuplicationPercent)
+}
+
+func scoreLabel(value *float64) string {
+	if value == nil {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.1f", *value)
+}
+
+func writeTextWarnings(w io.Writer, report Report) {
 	for _, warning := range report.Warnings {
 		fmt.Fprintf(w, "Warning: %s\n", warning)
 	}
+}
+
+func writeTextHotspots(w io.Writer, report Report) {
 	if len(report.Hotspots) > 0 {
 		fmt.Fprintln(w, "\nFiles needing attention:")
 		for i, f := range report.Hotspots {
@@ -144,41 +157,59 @@ func writeText(w io.Writer, report Report) {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	path := flag.String("path", ".", "Go repository or directory to scan (read-only)")
 	output := flag.String("format", "json", "Output format: json or text")
 	includeTests := flag.Bool("include-tests", false, "Include *_test.go files")
 	failUnder := flag.Float64("fail-under", -1, "Exit 3 if the score falls below the supplied 0-10 threshold")
 	flag.Parse()
 
-	if *output != "json" && *output != "text" {
-		fmt.Fprintln(os.Stderr, "invalid --format: expected json or text")
-		os.Exit(2)
-	}
-	if *failUnder > 10 || (*failUnder < 0 && *failUnder != -1) {
-		fmt.Fprintln(os.Stderr, "invalid --fail-under: expected 0-10")
-		os.Exit(2)
+	if err := validateFlags(*output, *failUnder); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 	report, err := analyze(*path, *includeTests)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "analysis error:", err)
-		os.Exit(2)
+		return 2
 	}
-	if *output == "json" {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-			fmt.Fprintln(os.Stderr, "failed to write JSON:", err)
-			os.Exit(2)
-		}
-	} else {
-		writeText(os.Stdout, report)
+	if err := emitReport(*output, report); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 	if report.AnalysisStatus != "complete" {
-		os.Exit(2)
+		return 2
 	}
 	if *failUnder >= 0 && report.CodeHealthScore != nil && *report.CodeHealthScore < *failUnder {
-		os.Exit(3)
+		return 3
 	}
+	return 0
+}
+
+func validateFlags(output string, failUnder float64) error {
+	if output != "json" && output != "text" {
+		return errors.New("invalid --format: expected json or text")
+	}
+	if failUnder > 10 || (failUnder < 0 && failUnder != -1) {
+		return errors.New("invalid --fail-under: expected 0-10")
+	}
+	return nil
+}
+
+func emitReport(output string, report Report) error {
+	if output == "text" {
+		writeText(os.Stdout, report)
+		return nil
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(report); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		return fmt.Errorf("failed to write JSON: %w", err)
+	}
+	return nil
 }
 
 func topHotspots(files []FileReport) []FileReport {

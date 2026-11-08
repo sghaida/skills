@@ -144,42 +144,63 @@ func measureBody(body *ast.BlockStmt) (int, int) {
 		if _, ok := node.(*ast.FuncLit); ok {
 			return
 		}
-		nextDepth := depth
-		switch n := node.(type) {
-		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-			complexity += 1 + depth
-			nextDepth++
-		case *ast.CaseClause:
-			if n.List != nil {
-				complexity++
-			}
-		case *ast.CommClause:
-			if n.Comm != nil {
-				complexity++
-			}
-		case *ast.BinaryExpr:
-			if n.Op == token.LAND || n.Op == token.LOR {
-				complexity++
-			}
-		}
+		increment, nextDepth := nodeComplexity(node, depth)
+		complexity += increment
 		if nextDepth > maxDepth {
 			maxDepth = nextDepth
 		}
-		// Recurse exactly once into children; ast.Inspect is used as a visitor adaptor.
-		ast.Inspect(node, func(child ast.Node) bool {
-			if child == node {
-				return true
-			}
-			if child != nil {
-				visit(child, nextDepth)
-			}
-			return false
-		})
+		visitChildren(node, nextDepth, visit)
 	}
 	for _, statement := range body.List {
 		visit(statement, 0)
 	}
 	return complexity, maxDepth
+}
+
+func nodeComplexity(node ast.Node, depth int) (int, int) {
+	if increment, nested := controlFlowComplexity(node, depth); nested {
+		return increment, depth + 1
+	}
+	return nodeClauseComplexity(node), depth
+}
+
+func controlFlowComplexity(node ast.Node, depth int) (int, bool) {
+	switch node.(type) {
+	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return 1 + depth, true
+	default:
+		return 0, false
+	}
+}
+
+func nodeClauseComplexity(node ast.Node) int {
+	switch n := node.(type) {
+	case *ast.CaseClause:
+		if n.List != nil {
+			return 1
+		}
+	case *ast.CommClause:
+		if n.Comm != nil {
+			return 1
+		}
+	case *ast.BinaryExpr:
+		if n.Op == token.LAND || n.Op == token.LOR {
+			return 1
+		}
+	}
+	return 0
+}
+
+func visitChildren(node ast.Node, depth int, visit func(ast.Node, int)) {
+	ast.Inspect(node, func(child ast.Node) bool {
+		if child == node {
+			return true
+		}
+		if child != nil {
+			visit(child, depth)
+		}
+		return false
+	})
 }
 
 type tokenSpan struct{ start, end int }
@@ -193,55 +214,56 @@ func scanTokens(src []byte, excluded []tokenSpan) []string {
 	spanIndex := 0
 	inExcluded := false
 	for {
-		position, tok, literal := s.Scan()
-		if tok == token.EOF {
+		value, done, include := nextScannedToken(&s, file, excluded, &spanIndex, &inExcluded)
+		if done {
 			break
 		}
-		if tok == token.SEMICOLON {
-			continue
-		}
-		offset := file.Offset(position)
-		for spanIndex < len(excluded) && offset >= excluded[spanIndex].end {
-			spanIndex++
-			inExcluded = false
-		}
-		if spanIndex < len(excluded) && offset >= excluded[spanIndex].start && offset < excluded[spanIndex].end {
-			if !inExcluded {
-				result = append(result, "<nested-function-body>")
-				inExcluded = true
-			}
-			continue
-		}
-		if tok.IsLiteral() {
-			result = append(result, tok.String()+":"+literal)
-		} else {
-			result = append(result, tok.String())
+		if include {
+			result = append(result, value)
 		}
 	}
 	return result
 }
 
-func locateModule(root string) (string, string) {
-	at := root
-	if info, err := os.Stat(root); err == nil && !info.IsDir() {
-		at = filepath.Dir(root)
+func nextScannedToken(s *scanner.Scanner, file *token.File, excluded []tokenSpan, spanIndex *int, inExcluded *bool) (string, bool, bool) {
+	position, tok, literal := s.Scan()
+	if tok == token.EOF {
+		return "", true, false
 	}
+	if tok == token.SEMICOLON {
+		return "", false, false
+	}
+	offset := file.Offset(position)
+	advanceExcludedSpans(offset, excluded, spanIndex, inExcluded)
+	if isExcludedOffset(offset, excluded, *spanIndex) {
+		if !*inExcluded {
+			*inExcluded = true
+			return "<nested-function-body>", false, true
+		}
+		return "", false, false
+	}
+	if tok.IsLiteral() {
+		return tok.String() + ":" + literal, false, true
+	}
+	return tok.String(), false, true
+}
+
+func advanceExcludedSpans(offset int, excluded []tokenSpan, spanIndex *int, inExcluded *bool) {
+	for *spanIndex < len(excluded) && offset >= excluded[*spanIndex].end {
+		*spanIndex = *spanIndex + 1
+		*inExcluded = false
+	}
+}
+
+func isExcludedOffset(offset int, excluded []tokenSpan, spanIndex int) bool {
+	return spanIndex < len(excluded) && offset >= excluded[spanIndex].start && offset < excluded[spanIndex].end
+}
+
+func locateModule(root string) (string, string) {
+	at := moduleSearchRoot(root)
 	for {
-		data, err := os.ReadFile(filepath.Join(at, "go.mod"))
-		if err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if !strings.HasPrefix(line, "module ") {
-					continue
-				}
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					name := strings.Trim(parts[1], `"`)
-					if name != "" {
-						return name, at
-					}
-				}
-			}
+		if name := moduleName(at); name != "" {
+			return name, at
 		}
 		parent := filepath.Dir(at)
 		if parent == at {
@@ -249,6 +271,35 @@ func locateModule(root string) (string, string) {
 		}
 		at = parent
 	}
+}
+
+func moduleSearchRoot(root string) string {
+	if info, err := os.Stat(root); err == nil && !info.IsDir() {
+		return filepath.Dir(root)
+	}
+	return root
+}
+
+func moduleName(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, ok := parseModuleLine(line); ok {
+			return name
+		}
+	}
+	return ""
+}
+
+func parseModuleLine(line string) (string, bool) {
+	parts := strings.Fields(strings.TrimSpace(line))
+	if len(parts) < 2 || parts[0] != "module" {
+		return "", false
+	}
+	name := strings.Trim(parts[1], `"`)
+	return name, name != ""
 }
 
 func withinModule(imp, module string) bool { return module != "" && strings.HasPrefix(imp, module+"/") }
@@ -269,22 +320,16 @@ func sourceFiles(root string, includeTests bool, sum *Summary) ([]string, error)
 		if err != nil {
 			return err
 		}
-		name := entry.Name()
 		if entry.IsDir() {
-			if path == root {
-				return nil
-			}
-			// Do not traverse vendor, hidden directories, testdata, or third-party trees.
-			if name == "vendor" || name == "testdata" || name == "third_party" || name == "node_modules" || strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
-			}
+			return directoryWalkAction(path, root, entry.Name())
+		}
+		if !isGoSource(entry) {
 			return nil
 		}
-		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(name, "_test.go") && !includeTests {
-			sum.ExcludedTestFiles++
+		if isExcludedTest(entry.Name(), includeTests) {
+			if strings.HasSuffix(entry.Name(), "_test.go") {
+				sum.ExcludedTestFiles++
+			}
 			return nil
 		}
 		paths = append(paths, path)
@@ -292,6 +337,24 @@ func sourceFiles(root string, includeTests bool, sum *Summary) ([]string, error)
 	})
 	sort.Strings(paths)
 	return paths, err
+}
+
+func directoryWalkAction(path, root, name string) error {
+	if path == root {
+		return nil
+	}
+	if name == "vendor" || name == "testdata" || name == "third_party" || name == "node_modules" || strings.HasPrefix(name, ".") {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func isGoSource(entry fs.DirEntry) bool {
+	return entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".go")
+}
+
+func isExcludedTest(name string, includeTests bool) bool {
+	return strings.HasSuffix(name, "_test.go") && !includeTests
 }
 
 func analyze(path string, includeTests bool) (Report, error) {
@@ -312,55 +375,10 @@ func analyze(path string, includeTests bool) (Report, error) {
 		return Report{}, err
 	}
 	module, _ := locateModule(root)
-	report := Report{
-		SchemaVersion:  "1.0",
-		ScoringVersion: scoringVersion,
-		Language:       "go",
-		MaxScore:       10,
-		Configuration: Configuration{
-			IncludeTests:          includeTests,
-			DuplicateWindowTokens: 35,
-			DuplicationEngine:     duplicationEngine,
-		},
-		Repository:     root,
-		AnalysisStatus: "complete",
-		Packages:       []PackageReport{},
-		Files:          []FileReport{},
-		Hotspots:       []FileReport{},
-		Warnings:       []string{},
-	}
-	parsedFiles := make([]*sourceFile, 0, len(paths))
-	rootDir := root
-	if info, e := os.Stat(root); e == nil && !info.IsDir() {
-		rootDir = filepath.Dir(root)
-	}
-	for _, p := range paths {
-		src, readErr := os.ReadFile(p)
-		if readErr != nil {
-			report.Warnings = append(report.Warnings, p+": "+readErr.Error())
-			continue
-		}
-		header := src
-		if len(header) > 2048 {
-			header = header[:2048]
-		}
-		if generatedHeader.Match(header) {
-			summary.ExcludedGeneratedFiles++
-			continue
-		}
-		relativePath, relErr := filepath.Rel(rootDir, p)
-		if relErr != nil {
-			return Report{}, relErr
-		}
-		f, parseErr := scanGo(p, relativePath, src)
-		if parseErr != nil {
-			report.Warnings = append(report.Warnings, relativePath+": "+parseErr.Error())
-			continue
-		}
-		parsedFiles = append(parsedFiles, f)
-		summary.GoFiles++
-		summary.SourceLines += f.lines
-		summary.Functions += len(f.funcs)
+	report := newReport(root, includeTests, duplicationEngine)
+	parsedFiles, err := parseSourceFiles(paths, root, &summary, &report)
+	if err != nil {
+		return Report{}, err
 	}
 	if len(parsedFiles) == 0 {
 		return Report{}, fmt.Errorf("no parsable non-generated Go files in %q; warnings: %s", root, strings.Join(report.Warnings, "; "))
@@ -368,22 +386,7 @@ func analyze(path string, includeTests bool) (Report, error) {
 	if module == "" {
 		report.Warnings = append(report.Warnings, "go.mod not found: coupling score is unavailable, and remaining weights are renormalized")
 	}
-	// Structural package fan-out is based on distinct imports of this module, not external dependencies.
-	deps := map[string]map[string]bool{}
-	for _, f := range parsedFiles {
-		if deps[f.packagePath] == nil {
-			deps[f.packagePath] = map[string]bool{}
-		}
-		for _, imp := range f.imports {
-			if withinModule(imp, module) {
-				deps[f.packagePath][imp] = true
-				f.internalImports++
-			}
-		}
-	}
-	for _, f := range parsedFiles {
-		f.packageFanOut = len(deps[f.packagePath])
-	}
+	assignPackageDependencies(parsedFiles, module)
 	if duplicationEngine == duplicationEngineJSCPDRS {
 		if err := detectWithJSCPDRS(root, parsedFiles, &summary); err != nil {
 			return Report{}, err
@@ -402,20 +405,86 @@ func analyze(path string, includeTests bool) (Report, error) {
 	}
 	report.Summary = summary
 	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, module != "")
-	if len(report.Warnings) != 0 {
-		for _, warning := range report.Warnings {
-			if strings.Contains(warning, "go.mod not found") {
-				continue
-			}
-			report.AnalysisStatus = "partial"
-			report.CodeHealthScore = nil
-			report.Classification = "unavailable"
-			break
+	finalizeReport(&report)
+	report.Hotspots = topHotspots(report.Files)
+	return report, nil
+}
+
+func newReport(root string, includeTests bool, duplicationEngine string) Report {
+	return Report{
+		SchemaVersion: "1.0", ScoringVersion: scoringVersion, Language: "go", MaxScore: 10,
+		Configuration: Configuration{IncludeTests: includeTests, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine},
+		Repository:    root, AnalysisStatus: "complete", Packages: []PackageReport{}, Files: []FileReport{},
+		Hotspots: []FileReport{}, Warnings: []string{},
+	}
+}
+
+func parseSourceFiles(paths []string, root string, summary *Summary, report *Report) ([]*sourceFile, error) {
+	rootDir := moduleSearchRoot(root)
+	parsedFiles := make([]*sourceFile, 0, len(paths))
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			report.Warnings = append(report.Warnings, path+": "+err.Error())
+			continue
 		}
+		if generatedHeader.Match(src[:minInt(len(src), 2048)]) {
+			summary.ExcludedGeneratedFiles++
+			continue
+		}
+		relativePath, err := filepath.Rel(rootDir, path)
+		if err != nil {
+			return nil, err
+		}
+		file, err := scanGo(path, relativePath, src)
+		if err != nil {
+			report.Warnings = append(report.Warnings, relativePath+": "+err.Error())
+			continue
+		}
+		parsedFiles = append(parsedFiles, file)
+		summary.GoFiles++
+		summary.SourceLines += file.lines
+		summary.Functions += len(file.funcs)
+	}
+	return parsedFiles, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func assignPackageDependencies(files []*sourceFile, module string) {
+	deps := map[string]map[string]bool{}
+	for _, file := range files {
+		if deps[file.packagePath] == nil {
+			deps[file.packagePath] = map[string]bool{}
+		}
+		for _, imp := range file.imports {
+			if withinModule(imp, module) {
+				deps[file.packagePath][imp] = true
+				file.internalImports++
+			}
+		}
+	}
+	for _, file := range files {
+		file.packageFanOut = len(deps[file.packagePath])
+	}
+}
+
+func finalizeReport(report *Report) {
+	for _, warning := range report.Warnings {
+		if strings.Contains(warning, "go.mod not found") {
+			continue
+		}
+		report.AnalysisStatus = "partial"
+		report.CodeHealthScore = nil
+		report.Classification = "unavailable"
+		return
 	}
 	if report.CodeHealthScore != nil {
 		report.Classification = classification(*report.CodeHealthScore)
 	}
-	report.Hotspots = topHotspots(report.Files)
-	return report, nil
 }

@@ -68,54 +68,84 @@ func exactWindow(a *functionData, ai int, b *functionData, bi, window int) bool 
 // detectDuplicates marks tokens covered by duplicate windows across functions.
 func detectDuplicates(files []*sourceFile, window int) {
 	const base uint64 = 0x9e3779b185ebca87
-	power := uint64(1)
-	for i := 1; i < window; i++ {
-		power *= base
-	}
+	power := rollingPower(base, window)
 	first := map[uint64]occurrence{}
 	for _, file := range files {
 		for _, fn := range file.funcs {
-			n := len(fn.tokens)
-			fn.duplicateMarkers = make([]int, n+1)
-			if n < window {
-				continue
-			}
-			hashes := make([]uint64, n)
-			rolling := uint64(0)
-			for i, tok := range fn.tokens {
-				hashes[i] = tokenHash(tok)
-				if i < window {
-					rolling = rolling*base + hashes[i]
-				}
-			}
-			for i := 0; i <= n-window; i++ {
-				if i > 0 {
-					rolling = (rolling-hashes[i-1]*power)*base + hashes[i+window-1]
-				}
-				if earlier, ok := first[rolling]; ok {
-					if earlier.function != fn && exactWindow(earlier.function, earlier.index, fn, i, window) {
-						earlier.function.duplicateMarkers[earlier.index]++
-						earlier.function.duplicateMarkers[earlier.index+window]--
-						fn.duplicateMarkers[i]++
-						fn.duplicateMarkers[i+window]--
-					}
-				} else {
-					first[rolling] = occurrence{fn, i}
-				}
-			}
+			detectFunctionDuplicates(fn, window, base, power, first)
 		}
 	}
 	for _, f := range files {
 		for _, fn := range f.funcs {
-			coverage := 0
-			for i := range fn.tokens {
-				coverage += fn.duplicateMarkers[i]
-				if coverage > 0 {
-					f.duplicateTokens++
-				}
-			}
+			f.duplicateTokens += duplicateCoverage(fn)
 		}
 	}
+}
+
+func rollingPower(base uint64, window int) uint64 {
+	power := uint64(1)
+	for i := 1; i < window; i++ {
+		power *= base
+	}
+	return power
+}
+
+func detectFunctionDuplicates(fn *functionData, window int, base, power uint64, first map[uint64]occurrence) {
+	n := len(fn.tokens)
+	fn.duplicateMarkers = make([]int, n+1)
+	if n < window {
+		return
+	}
+	hashes := tokenHashes(fn.tokens)
+	rolling := initialWindowHash(hashes, window, base)
+	for i := 0; i <= n-window; i++ {
+		if i > 0 {
+			rolling = (rolling-hashes[i-1]*power)*base + hashes[i+window-1]
+		}
+		recordDuplicateWindow(first, rolling, fn, i, window)
+	}
+}
+
+func tokenHashes(tokens []string) []uint64 {
+	hashes := make([]uint64, len(tokens))
+	for i, token := range tokens {
+		hashes[i] = tokenHash(token)
+	}
+	return hashes
+}
+
+func initialWindowHash(hashes []uint64, window int, base uint64) uint64 {
+	var rolling uint64
+	for i := 0; i < window; i++ {
+		rolling = rolling*base + hashes[i]
+	}
+	return rolling
+}
+
+func recordDuplicateWindow(first map[uint64]occurrence, hash uint64, fn *functionData, index, window int) {
+	earlier, ok := first[hash]
+	if !ok {
+		first[hash] = occurrence{fn, index}
+		return
+	}
+	if earlier.function == fn || !exactWindow(earlier.function, earlier.index, fn, index, window) {
+		return
+	}
+	earlier.function.duplicateMarkers[earlier.index]++
+	earlier.function.duplicateMarkers[earlier.index+window]--
+	fn.duplicateMarkers[index]++
+	fn.duplicateMarkers[index+window]--
+}
+
+func duplicateCoverage(fn *functionData) int {
+	coverage, duplicateTokens := 0, 0
+	for i := range fn.tokens {
+		coverage += fn.duplicateMarkers[i]
+		if coverage > 0 {
+			duplicateTokens++
+		}
+	}
+	return duplicateTokens
 }
 
 // complexityForFunction maps branching complexity to a 0-to-10 score.
@@ -204,53 +234,17 @@ func scoreDimensions(d Dimensions) float64 {
 // fileScore builds a file report from analyzed metrics and emits threshold
 // findings for complexity, size, duplication, coupling, and nesting.
 func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
-	duplicateTokens := f.duplicateTokens
-	totalFunctionTokens := f.totalFunctionTokens
-	dup := percent(duplicateTokens, totalFunctionTokens)
-	if f.externalDuplicationPercent != nil {
-		dup = *f.externalDuplicationPercent
-		duplicateTokens = f.externalDuplicateTokens
-		totalFunctionTokens = f.externalTotalTokens
-	}
-	d := Dimensions{
-		Complexity:  ptr(round1(complexityForFile(f))),
-		Structure:   ptr(round1(structureForFile(f))),
-		Duplication: ptr(round1(clamp(10 - float64(dup)/10))),
-	}
-	if moduleAvailable {
-		d.Coupling = ptr(round1(couplingForPackage(f.packageFanOut)))
-	}
+	duplicateTokens, totalFunctionTokens, dup := duplicationStats(f)
+	d := fileDimensions(f, moduleAvailable, dup)
 	score := round1(scoreDimensions(d))
 	r := FileReport{
 		Path: f.path, Package: f.packageName, Score: score, Classification: classification(score),
 		Lines: f.lines, Functions: []FunctionReport{}, InternalImports: f.internalImports,
 		DuplicateTokens: duplicateTokens, TotalFunctionTokens: totalFunctionTokens,
-		DuplicationPercent: dup, Dimensions: d, Findings: []Finding{},
+		DuplicationPercent: dup, Dimensions: d, Findings: findingsForFile(f, dup, moduleAvailable),
 	}
 	for _, fn := range f.funcs {
 		r.Functions = append(r.Functions, fn.report)
-		if fn.report.BranchingComplexity > 15 {
-			severity := "warning"
-			if fn.report.BranchingComplexity > 25 {
-				severity = "high"
-			}
-			r.Findings = append(r.Findings, Finding{"high-complexity", severity, fn.report.Line, "Branching complexity " + itoa(fn.report.BranchingComplexity) + " in " + fn.report.Name})
-		}
-		if fn.report.Lines > 80 {
-			r.Findings = append(r.Findings, Finding{"long-function", "warning", fn.report.Line, itoa(fn.report.Lines) + " lines in " + fn.report.Name})
-		}
-		if fn.report.MaxNesting > 4 {
-			r.Findings = append(r.Findings, Finding{"deep-nesting", "warning", fn.report.Line, "Nesting depth " + itoa(fn.report.MaxNesting) + " in " + fn.report.Name})
-		}
-	}
-	if dup >= 10 {
-		r.Findings = append(r.Findings, Finding{"duplicate-blocks", "warning", 0, format1(dup) + "% of function tokens match another function"})
-	}
-	if moduleAvailable && f.packageFanOut > 6 {
-		r.Findings = append(r.Findings, Finding{"high-coupling", "warning", 0, "Package imports " + itoa(f.packageFanOut) + " internal packages"})
-	}
-	if f.lines > 600 {
-		r.Findings = append(r.Findings, Finding{"large-file", "warning", 0, itoa(f.lines) + " total lines"})
 	}
 	sort.Slice(r.Findings, func(i, j int) bool {
 		if r.Findings[i].Line == r.Findings[j].Line {
@@ -259,6 +253,62 @@ func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 		return r.Findings[i].Line < r.Findings[j].Line
 	})
 	return r
+}
+
+func duplicationStats(f *sourceFile) (int, int, float64) {
+	if f.externalDuplicationPercent != nil {
+		return f.externalDuplicateTokens, f.externalTotalTokens, *f.externalDuplicationPercent
+	}
+	duplicateTokens := f.duplicateTokens
+	totalFunctionTokens := f.totalFunctionTokens
+	return duplicateTokens, totalFunctionTokens, percent(duplicateTokens, totalFunctionTokens)
+}
+
+func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent float64) Dimensions {
+	d := Dimensions{
+		Complexity:  ptr(round1(complexityForFile(f))),
+		Structure:   ptr(round1(structureForFile(f))),
+		Duplication: ptr(round1(clamp(10 - duplicationPercent/10))),
+	}
+	if moduleAvailable {
+		d.Coupling = ptr(round1(couplingForPackage(f.packageFanOut)))
+	}
+	return d
+}
+
+func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
+	findings := make([]Finding, 0)
+	for _, fn := range f.funcs {
+		findings = append(findings, findingsForFunction(fn)...)
+	}
+	if duplicationPercent >= 10 {
+		findings = append(findings, Finding{"duplicate-blocks", "warning", 0, format1(duplicationPercent) + "% of function tokens match another function"})
+	}
+	if moduleAvailable && f.packageFanOut > 6 {
+		findings = append(findings, Finding{"high-coupling", "warning", 0, "Package imports " + itoa(f.packageFanOut) + " internal packages"})
+	}
+	if f.lines > 600 {
+		findings = append(findings, Finding{"large-file", "warning", 0, itoa(f.lines) + " total lines"})
+	}
+	return findings
+}
+
+func findingsForFunction(fn *functionData) []Finding {
+	findings := make([]Finding, 0, 3)
+	if fn.report.BranchingComplexity > 15 {
+		severity := "warning"
+		if fn.report.BranchingComplexity > 25 {
+			severity = "high"
+		}
+		findings = append(findings, Finding{"high-complexity", severity, fn.report.Line, "Branching complexity " + itoa(fn.report.BranchingComplexity) + " in " + fn.report.Name})
+	}
+	if fn.report.Lines > 80 {
+		findings = append(findings, Finding{"long-function", "warning", fn.report.Line, itoa(fn.report.Lines) + " lines in " + fn.report.Name})
+	}
+	if fn.report.MaxNesting > 4 {
+		findings = append(findings, Finding{"deep-nesting", "warning", fn.report.Line, "Nesting depth " + itoa(fn.report.MaxNesting) + " in " + fn.report.Name})
+	}
+	return findings
 }
 
 // weightedDimensions aggregates file reports using each file's line count as

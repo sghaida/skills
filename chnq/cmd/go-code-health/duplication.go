@@ -69,15 +69,26 @@ func detectWithJSCPDRS(root string, files []*sourceFile, summary *Summary) error
 	if err != nil {
 		return errors.New("jscpd-rs duplication engine selected, but the jscpd executable was not found; run `make install-jscpd-rs`")
 	}
-
 	reportDir, err := os.MkdirTemp("", "go-code-health-jscpd-*")
 	if err != nil {
 		return fmt.Errorf("create jscpd report directory: %w", err)
 	}
 	defer os.RemoveAll(reportDir)
+	if err := runJSCPD(jscpdPath, root, reportDir); err != nil {
+		return err
+	}
+	report, err := readJSCPDReport(reportDir)
+	if err != nil {
+		return err
+	}
+	applyJSCPDReport(report, files, summary)
+	return nil
+}
 
+func runJSCPD(path, root, reportDir string) error {
 	var stderr bytes.Buffer
-	cmd := exec.Command(jscpdPath, "--format", "go", "--reporters", "json", "--output", reportDir, root)
+	const ignoredPaths = ".github/**,.git/**,**/.build/**,**/vendor/**,**/node_modules/**"
+	cmd := exec.Command(path, "--format", "go", "--ignore", ignoredPaths, "--reporters", "json", "--output", reportDir, root)
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
 	if err := cmd.Run(); err != nil {
@@ -87,33 +98,42 @@ func detectWithJSCPDRS(root string, files []*sourceFile, summary *Summary) error
 		}
 		return fmt.Errorf("run jscpd-rs: %w", err)
 	}
+	return nil
+}
 
+func readJSCPDReport(reportDir string) (jscpdReport, error) {
 	data, err := os.ReadFile(filepath.Join(reportDir, "jscpd-report.json"))
 	if err != nil {
-		return fmt.Errorf("read jscpd-rs JSON report: %w", err)
+		return jscpdReport{}, fmt.Errorf("read jscpd-rs JSON report: %w", err)
 	}
 	var report jscpdReport
 	if err := json.Unmarshal(data, &report); err != nil {
-		return fmt.Errorf("parse jscpd-rs JSON report: %w", err)
+		return jscpdReport{}, fmt.Errorf("parse jscpd-rs JSON report: %w", err)
 	}
+	return report, nil
+}
 
+func applyJSCPDReport(report jscpdReport, files []*sourceFile, summary *Summary) {
 	summary.DuplicateTokens = report.Statistics.Total.DuplicatedTokens
 	summary.FunctionTokens = report.Statistics.Total.Tokens
 	summary.DuplicationPercent = round1(report.Statistics.Total.PercentageTokens)
-
 	for _, format := range report.Statistics.Formats {
 		for path, stat := range format.Sources {
-			for _, file := range files {
-				if sameSourcePath(path, file.path) {
-					percent := round1(stat.PercentageTokens)
-					file.externalDuplicationPercent = &percent
-					file.externalDuplicateTokens = stat.DuplicatedTokens
-					file.externalTotalTokens = stat.Tokens
-				}
-			}
+			applySourceStatistic(path, stat, files)
 		}
 	}
-	return nil
+}
+
+func applySourceStatistic(path string, stat jscpdStatistic, files []*sourceFile) {
+	for _, file := range files {
+		if !sameSourcePath(path, file.path) {
+			continue
+		}
+		percent := round1(stat.PercentageTokens)
+		file.externalDuplicationPercent = &percent
+		file.externalDuplicateTokens = stat.DuplicatedTokens
+		file.externalTotalTokens = stat.Tokens
+	}
 }
 
 func locateJSCPD() (string, error) {
