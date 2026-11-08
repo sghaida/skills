@@ -79,6 +79,43 @@ flowchart TD
 6. The agent reports measured findings, hotspots, and deterministic improvement
    suggestions.
 
+### Using `chnq` with agentic coding
+
+`chnq` works as a measurable quality gate within an agentic coding workflow.
+The analyzer supplies evidence for the agent; it does not replace code review,
+tests, security analysis, or the Go compiler.
+
+The recommended workflow is:
+
+1. **Identify the project:** The agent locates the Go module to analyze.
+2. **Read the policy:** The agent reads `.go-code-health.json` and uses its
+   duplication engine, thresholds, and test-inclusion settings.
+3. **Run a baseline:** The agent performs a complete scan before making a
+   requested code change.
+4. **Review evidence:** The agent checks the overall score, every configured
+   dimension, health thresholds, and the highest-priority hotspots.
+5. **Make focused changes:** If the user requests implementation, the agent
+   addresses the measured findings without changing unrelated behavior.
+6. **Verify the result:** The agent runs the same complete scan after the
+   change and reports the new measured values and policy status.
+7. **Use CI as a guardrail:** The project can run `--fail-under` and compare
+   configured dimension and health thresholds in continuous integration.
+
+`chnq` reads source files and Git metadata only when Git churn is explicitly
+enabled. It never builds, runs, tests, or modifies the analyzed project. An
+agent may edit project files only as a separate, explicitly requested coding
+action, followed by a fresh `chnq` scan.
+
+An agent can request a machine-readable report with:
+
+```sh
+./chnq/scripts/analyze.sh /path/to/go/repo --format json --no-cache
+```
+
+It can then use the measured report to explain why a policy passes or fails,
+prioritize hotspots, and verify that a refactoring improved the intended
+dimension without claiming that the score proves correctness.
+
 ### Quick start
 
 The analyzer requires Go 1.27.3. It has no third-party Go dependencies.
