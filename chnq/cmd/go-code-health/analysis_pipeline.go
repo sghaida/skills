@@ -49,12 +49,13 @@ func validateSourceFiles(paths []string) error {
 
 // analysisinputs represents analysis inputs data
 type analysisInputs struct {
-	root              string
-	summary           Summary
-	paths             []string
-	duplicationEngine string
-	module            string
-	report            Report
+	root                    string
+	summary                 Summary
+	paths                   []string
+	duplicationEngine       string
+	broadInterfaceThreshold int
+	module                  string
+	report                  Report
 }
 
 // prepareanalysis handles prepare analysis
@@ -72,12 +73,20 @@ func prepareAnalysis(path string, includeTests, includeGitChurn bool) (analysisI
 	if err := validateSourceFiles(inputs.paths); err != nil {
 		return analysisInputs{}, fmt.Errorf("%w in %q", err, root)
 	}
-	inputs.duplicationEngine, err = loadDuplicationEngine(root)
-	if err != nil {
+	projectConfig, configErr := loadProjectConfig(root)
+	if configErr != nil {
+		return analysisInputs{}, configErr
+	}
+	inputs.duplicationEngine = projectConfig.DuplicationEngine
+	if inputs.duplicationEngine == "" {
+		inputs.duplicationEngine = duplicationEngineInternal
+	}
+	if _, err := validateDuplicationEngine(inputs.duplicationEngine, filepath.Join(root, ".go-code-health.json")); err != nil {
 		return analysisInputs{}, err
 	}
+	inputs.broadInterfaceThreshold = projectConfig.BroadInterfaceThreshold
 	inputs.module, _ = locateModule(root)
-	inputs.report = newReport(root, includeTests, includeGitChurn, inputs.duplicationEngine)
+	inputs.report = newReport(root, includeTests, includeGitChurn, inputs.duplicationEngine, inputs.broadInterfaceThreshold)
 	return inputs, nil
 }
 
@@ -116,6 +125,8 @@ func analyzeParsedFiles(inputs *analysisInputs, includeGitChurn bool, workers in
 			return err
 		}
 	}
+	analyzeArchitecture(parsedFiles, inputs.broadInterfaceThreshold)
+	collectArchitectureHealth(parsedFiles, &inputs.summary, inputs.broadInterfaceThreshold)
 	if err := completeDuplicationAnalysis(inputs, parsedFiles); err != nil {
 		return err
 	}
@@ -199,10 +210,10 @@ func finalizeDuplicationSummary(files []*sourceFile, engine string, summary *Sum
 }
 
 // newreport handles new report
-func newReport(root string, includeTests, includeGitChurn bool, duplicationEngine string) Report {
+func newReport(root string, includeTests, includeGitChurn bool, duplicationEngine string, broadInterfaceThreshold int) Report {
 	return Report{
 		SchemaVersion: "1.0", ScoringVersion: scoringVersion, Language: "go", MaxScore: 10,
-		Configuration: Configuration{IncludeTests: includeTests, IncludeGitChurn: includeGitChurn, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine},
+		Configuration: Configuration{IncludeTests: includeTests, IncludeGitChurn: includeGitChurn, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine, BroadInterfaceThreshold: broadInterfaceThreshold},
 		Repository:    root, AnalysisStatus: "complete", Packages: []PackageReport{}, Files: []FileReport{},
 		Hotspots: []FileReport{}, Warnings: []string{},
 	}

@@ -14,7 +14,10 @@ Projects can store their code-health policy in a checked-in
     "complexity": 6.0,
     "structure": 7.0,
     "duplication": 8.0,
-    "coupling": 6.0
+    "coupling": 6.0,
+    "cyclic_dependencies": 8.0,
+    "interface_compliance": 7.0,
+    "duck_typing": 7.0
   },
   "health_thresholds": {
     "minimum_documentation_percent": 80.0,
@@ -27,7 +30,8 @@ Projects can store their code-health policy in a checked-in
     "maximum_incoming_dependencies": 20,
     "maximum_git_churn": 2000
   },
-  "include_tests": false
+  "include_tests": false,
+  "broad_interface_threshold": 5
 }
 ```
 
@@ -47,6 +51,8 @@ Projects can store their code-health policy in a checked-in
   `maximum_` thresholds pass when the measured value is less than or equal to
   the threshold.
 - `include_tests` defaults to `false` when omitted.
+- `broad_interface_threshold` controls how many methods make an interface
+  broad. It defaults to `5` when omitted and must be a positive integer.
 
 The policy applies to the complete scan of the configured project scope.
 `minimum_score` is compared with `code_health_score`; each configured
@@ -111,6 +117,26 @@ Coupling is supported when the analyzed project contains a `go.mod`. If no
 `go.mod` is found, the analyzer reports coupling as unavailable (`null`) and
 the remaining metrics are reweighted. Do not configure a coupling threshold
 for projects where coupling is not applicable.
+
+### Cyclic dependencies
+
+- **`minimum_dimensions.cyclic_dependencies`** uses a 0.0–10.0 score.
+- A score of `10.0` means no analyzed package participates in an internal
+  import cycle; cycle participation lowers the score.
+- The existing `health.import_cycles` metric reports the number of files in
+  participating packages.
+
+### Interface compliance and duck typing
+
+- **`minimum_dimensions.interface_compliance`** gates unused and broad
+  interface declarations.
+- **`minimum_dimensions.duck_typing`** gates evidence that concrete method sets
+  satisfy declared interfaces.
+- Both dimensions are independent 0.0–10.0 scores and do not change the
+  existing overall score.
+- `health.interface_count`, `health.unused_interfaces`,
+  `health.broad_interfaces`, and `health.implicit_implementations` provide
+  the underlying measurements.
 
 ### `include_tests`
 

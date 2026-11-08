@@ -80,6 +80,7 @@ func (iu *IncrementalUpdate) extractHotspots(files []FileReport) []FileReport {
 // buildpackagereports handles build package reports
 func (iu *IncrementalUpdate) buildPackageReports(files []FileReport) []PackageReport {
 	pkgMap := make(map[string]*PackageReport)
+	pkgFiles := make(map[string][]FileReport)
 	for _, f := range files {
 		if _, exists := pkgMap[f.Package]; !exists {
 			pkgMap[f.Package] = &PackageReport{
@@ -89,10 +90,12 @@ func (iu *IncrementalUpdate) buildPackageReports(files []FileReport) []PackageRe
 		pkg := pkgMap[f.Package]
 		pkg.Files++
 		pkg.Lines += f.Lines
+		pkgFiles[f.Package] = append(pkgFiles[f.Package], f)
 	}
 
 	var packages []PackageReport
 	for _, pkg := range pkgMap {
+		pkg.Dimensions, pkg.Score = weightedDimensions(pkgFiles[pkg.Path])
 		packages = append(packages, *pkg)
 	}
 
@@ -144,6 +147,10 @@ func accumulateFileMetrics(summary *Summary, file FileReport) {
 	summary.Health.Goroutines += file.Health.Goroutines
 	summary.Health.ChannelOperations += file.Health.ChannelOperations
 	summary.Health.ImportCycles += file.Health.ImportCycles
+	summary.Health.InterfaceCount += file.Health.InterfaceCount
+	summary.Health.UnusedInterfaces += file.Health.UnusedInterfaces
+	summary.Health.BroadInterfaces += file.Health.BroadInterfaces
+	summary.Health.ImplicitImplementations += file.Health.ImplicitImplementations
 	summary.Health.DependencyDepth += file.Health.DependencyDepth
 	summary.Health.IncomingDependencies += file.Health.IncomingDependencies
 	summary.Health.GitChurn += file.Health.GitChurn
@@ -196,10 +203,13 @@ func addWeightedDimensions(current, next Dimensions, weight, total float64) Dime
 		return &value
 	}
 	return Dimensions{
-		Complexity:  average(current.Complexity, next.Complexity),
-		Structure:   average(current.Structure, next.Structure),
-		Duplication: average(current.Duplication, next.Duplication),
-		Coupling:    average(current.Coupling, next.Coupling),
+		Complexity:          average(current.Complexity, next.Complexity),
+		Structure:           average(current.Structure, next.Structure),
+		Duplication:         average(current.Duplication, next.Duplication),
+		Coupling:            average(current.Coupling, next.Coupling),
+		CyclicDependencies:  average(current.CyclicDependencies, next.CyclicDependencies),
+		InterfaceCompliance: average(current.InterfaceCompliance, next.InterfaceCompliance),
+		DuckTyping:          average(current.DuckTyping, next.DuckTyping),
 	}
 }
 

@@ -290,9 +290,12 @@ func duplicationStats(f *sourceFile) (int, int, float64) {
 // filedimensions handles file dimensions
 func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent float64) Dimensions {
 	d := Dimensions{
-		Complexity:  ptr(round1(complexityForFile(f))),
-		Structure:   ptr(round1(structureForFile(f))),
-		Duplication: ptr(round1(clamp(10 - duplicationPercent/10))),
+		Complexity:          ptr(round1(complexityForFile(f))),
+		Structure:           ptr(round1(structureForFile(f))),
+		Duplication:         ptr(round1(clamp(10 - duplicationPercent/10))),
+		CyclicDependencies:  ptr(round1(f.cycleScore)),
+		InterfaceCompliance: ptr(round1(f.interfaceScore)),
+		DuckTyping:          ptr(round1(f.duckTypingScore)),
 	}
 	if moduleAvailable {
 		d.Coupling = ptr(round1(couplingForPackage(f.packageFanOut)))
@@ -371,6 +374,12 @@ func appendHealthFindings(findings []Finding, f *sourceFile) []Finding {
 	if f.packageImportCycles > 0 {
 		findings = append(findings, Finding{"import-cycle", "high", 0, "Package participates in an internal import cycle"})
 	}
+	if f.interfaceScore < 5 {
+		findings = append(findings, Finding{"interface-compliance", "warning", 0, "Interface usage or breadth is reducing the interface compliance score"})
+	}
+	if f.duckTypingScore < 5 {
+		findings = append(findings, Finding{"duck-typing", "warning", 0, "No matching concrete method set was found for one or more interfaces"})
+	}
 	if f.gitChurn > 1000 {
 		findings = append(findings, Finding{"high-git-churn", "warning", 0, itoa(f.gitChurn) + " changed lines across Git history"})
 	}
@@ -404,15 +413,15 @@ func weightedDimensions(files []FileReport) (Dimensions, float64) {
 }
 
 // weightedtotals handles weighted totals
-func weightedTotals(files []FileReport) ([4]float64, [4]float64, float64, float64) {
-	sum := [4]float64{}
-	sizes := [4]float64{}
+func weightedTotals(files []FileReport) ([7]float64, [7]float64, float64, float64) {
+	sum := [7]float64{}
+	sizes := [7]float64{}
 	total, totalWeight := 0.0, 0.0
 	for _, f := range files {
 		weight := float64(maxInt(f.Lines, 1))
 		total += f.Score * weight
 		totalWeight += weight
-		dimVals := []*float64{f.Dimensions.Complexity, f.Dimensions.Structure, f.Dimensions.Duplication, f.Dimensions.Coupling}
+		dimVals := dimensionValues(f.Dimensions)
 		for i, v := range dimVals {
 			if v != nil {
 				sum[i] += *v * weight
@@ -424,19 +433,27 @@ func weightedTotals(files []FileReport) ([4]float64, [4]float64, float64, float6
 }
 
 // dimensionsfromtotals handles dimensions from totals
-func dimensionsFromTotals(sum, sizes [4]float64, total, totalWeight float64) (Dimensions, float64) {
+func dimensionsFromTotals(sum, sizes [7]float64, total, totalWeight float64) (Dimensions, float64) {
 	d := Dimensions{}
-	dimensions := []*float64{d.Complexity, d.Structure, d.Duplication, d.Coupling}
+	dimensions := dimensionValues(d)
 	for i := range dimensions {
 		if sizes[i] > 0 {
 			dimensions[i] = ptr(round1(sum[i] / sizes[i]))
 		}
 	}
 	d.Complexity, d.Structure, d.Duplication, d.Coupling = dimensions[0], dimensions[1], dimensions[2], dimensions[3]
+	d.CyclicDependencies, d.InterfaceCompliance, d.DuckTyping = dimensions[4], dimensions[5], dimensions[6]
 	if totalWeight == 0 {
 		return d, 0
 	}
 	return d, round1(total / totalWeight)
+}
+
+func dimensionValues(d Dimensions) []*float64 {
+	return []*float64{
+		d.Complexity, d.Structure, d.Duplication, d.Coupling,
+		d.CyclicDependencies, d.InterfaceCompliance, d.DuckTyping,
+	}
 }
 
 // buildScores creates deterministic file and package reports and the overall
@@ -460,7 +477,7 @@ func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageRe
 	packageReports := make([]PackageReport, 0, len(names))
 	for _, name := range names {
 		group := packages[name]
-		_, score := weightedDimensions(group)
+		groupDimensions, score := weightedDimensions(group)
 		lines := 0
 		var health HealthMetrics
 		for _, f := range group {
@@ -474,6 +491,10 @@ func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageRe
 			health.Goroutines += f.Health.Goroutines
 			health.ChannelOperations += f.Health.ChannelOperations
 			health.ImportCycles += f.Health.ImportCycles
+			health.InterfaceCount += f.Health.InterfaceCount
+			health.UnusedInterfaces += f.Health.UnusedInterfaces
+			health.BroadInterfaces += f.Health.BroadInterfaces
+			health.ImplicitImplementations += f.Health.ImplicitImplementations
 			health.IncomingDependencies = f.Health.IncomingDependencies
 			health.DependencyDepth = f.Health.DependencyDepth
 		}
@@ -481,7 +502,7 @@ func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageRe
 		packageReports = append(packageReports, PackageReport{
 			Path: name, Score: score, Files: len(group), Lines: lines,
 			InternalDependencies: depCounts[name], IncomingDependencies: health.IncomingDependencies,
-			DependencyDepth: health.DependencyDepth,
+			DependencyDepth: health.DependencyDepth, Dimensions: groupDimensions,
 		})
 	}
 	dims, score := weightedDimensions(results)

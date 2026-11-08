@@ -247,6 +247,51 @@ func TestPackageGraphMetrics(t *testing.T) {
 	if report.Packages[0].IncomingDependencies != 1 || report.Packages[1].IncomingDependencies != 1 {
 		t.Fatalf("unexpected fan-in: %+v", report.Packages)
 	}
+	if report.Dimensions.CyclicDependencies == nil || *report.Dimensions.CyclicDependencies != 0 {
+		t.Fatalf("expected zero cycle score for a cyclic repository, got %+v", report.Dimensions)
+	}
+}
+
+func TestInterfaceArchitectureMetrics(t *testing.T) {
+	root := makeRepo(t, true)
+	writeFixture(t, root, ".go-code-health.json", `{"broad_interface_threshold": 1}`)
+	writeFixture(t, root, "reader.go", `package demo
+
+type Reader interface {
+	Read()
+}
+
+type Unused interface {
+	Close()
+}
+
+type Broad interface {
+	Open()
+	Close()
+}
+
+type reader struct{}
+
+func (reader) Read() {}
+`)
+	report, err := analyze(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Configuration.BroadInterfaceThreshold != 1 {
+		t.Fatalf("unexpected broad interface threshold: %+v", report.Configuration)
+	}
+	if report.Summary.Health.InterfaceCount != 3 ||
+		report.Summary.Health.UnusedInterfaces != 3 ||
+		report.Summary.Health.BroadInterfaces != 1 {
+		t.Fatalf("unexpected interface metrics: %+v", report.Summary.Health)
+	}
+	if report.Dimensions.InterfaceCompliance == nil ||
+		*report.Dimensions.InterfaceCompliance >= 10 ||
+		report.Dimensions.DuckTyping == nil ||
+		*report.Dimensions.DuckTyping <= 0 {
+		t.Fatalf("unexpected interface dimensions: %+v", report.Dimensions)
+	}
 }
 
 func TestGitChurnPaths(t *testing.T) {

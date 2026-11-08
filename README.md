@@ -24,13 +24,16 @@ repository, package, and file levels.
 |--------------------------------------|-----------|--------------------|------------------|--------------------|--------------|
 | **Structural Maintainability Score** | ✅ (0-10) | ✅ (A-F)            | ✅                | ❌                  | ✅            |
 | **Go-Specialized**                   | ✅         | ❌ (generic)        | ❌ (generic)     | ✅                  | ❌ (generic) |
+| **Architecture Health Metrics**      | ✅ (3)    | ✅ (rules)          | ✅ (architecture) | ✅ (linters)       | ✅ (rules)   |
 | **Deterministic**                    | ✅         | ❌ (rules-based)    | ❌ (rules-based) | ✅                  | ❌            |
 | **Zero Dependencies**                | ✅         | ❌ (needs Java, DB) | ❌ (SaaS)        | ❌ (needs plugins)  | ❌ (SaaS)    |
 | **Security Scanning**                | ❌         | ✅                  | ❌               | ✅                  | ✅            |
 | **Test Coverage**                    | ❌         | ✅                  | ✅               | ❌                  | ✅            |
-| **Git History Analysis**             | ❌         | ❌                  | ✅               | ❌                  | ❌            |
+| **Git History Analysis**             | ✅ (opt-in) | ❌                | ✅               | ❌                  | ❌            |
 | **CI/CD Integration**                | ✅         | ✅                  | ✅               | ✅                  | ✅            |
-| **Performance Metrics**              | ❌         | ❌                  | ✅               | ❌                  | ❌            |
+| **Caching + Incremental Scans**      | ✅         | ✅                  | ✅               | ❌                  | ✅            |
+| **Hotspot Explanations**             | ✅         | ✅                  | ✅               | ❌                  | ✅            |
+| **Performance Metrics**              | ✅         | ❌                  | ✅               | ❌                  | ❌            |
 | **API/Dashboard**                    | ❌         | ✅                  | ✅               | ❌                  | ✅            |
 
 <!-- markdownlint-enable MD013 MD060 -->
@@ -68,8 +71,9 @@ flowchart TD
    without building or executing the target repository.
 3. A local cache reuses unchanged results; changed files are processed by a
    bounded worker pool and merged deterministically.
-4. The analyzer calculates complexity, structure, duplication, and coupling
-   dimensions, then produces repository, package, and file scores.
+4. The analyzer calculates the four weighted health dimensions plus
+   independent cycle, interface-compliance, and duck-typing scores, then
+   produces repository, package, and file reports.
 5. The policy gate checks the overall score, dimension thresholds, and health
    thresholds before reporting pass or fail.
 6. The agent reports measured findings, hotspots, and deterministic improvement
@@ -131,8 +135,12 @@ overall score and, optionally, minimum scores for individual dimensions:
   "minimum_dimensions": {
     "complexity": 6.0,
     "structure": 7.0,
-    "duplication": 8.0
+    "duplication": 8.0,
+    "cyclic_dependencies": 8.0,
+    "interface_compliance": 7.0,
+    "duck_typing": 7.0
   },
+  "broad_interface_threshold": 5,
   "include_tests": false
 }
 ```
@@ -197,17 +205,21 @@ make run TARGET=/path/to/your/go/repo ARGS="--fail-under 7"
 - Discarded return values and `panic` usage
 - TODO/FIXME markers and concurrency operations
 - Package fan-in, dependency depth, and import cycles
+- Cyclic dependency, interface compliance, and duck-typing scores
+- Interface counts, unused interfaces, broad interfaces, and implicit
+  implementations
 - Optional Git changed-line hotspots (`--include-git-churn`)
 
 Scores range from 0.0 to 10.0. The model is a custom heuristic and is not
 equivalent to SonarQube, CodeScene, or an ISO certification.
 
-The additional health metrics are reported as measurements and findings; they
-are not folded into the four-dimensional score. Git churn is opt-in because it
-depends on repository history and is not a source-only signal. The analyzer
-does not measure test correctness, test coverage, security, type errors,
-cohesion, architecture layer violations, or semantic clones. It never executes
-code from the repository under analysis.
+The three architecture scores are reported independently from the existing
+four-dimensional score and can be enforced through `minimum_dimensions`.
+`broad_interface_threshold` defaults to 5 methods and can be set per project.
+Git churn is opt-in because it depends on repository history and is not a
+source-only signal. The analyzer does not measure test correctness, test
+coverage, security, type errors, architecture layer violations, or semantic
+clones. It never executes code from the repository under analysis.
 
 ### How metrics are calculated
 
@@ -315,6 +327,120 @@ modules.
 Coupling is a simple dependency-count signal. It does not measure reverse
 dependencies, symbol-level usage, interface quality, architecture boundaries,
 or whether a dependency is easy to replace.
+
+#### Architecture dimensions
+
+The analyzer also reports three independent architecture dimensions. They are
+not included in the weighted overall score, but projects can enforce them with
+`minimum_dimensions`:
+
+- **Cyclic dependencies:** Scores package cycle health. It is 10 when no
+  package participates in an internal import cycle and decreases for packages
+  involved in cycles.
+- **Interface compliance:** Scores interface usage and design health. It
+  penalizes unused interfaces and interfaces whose method count exceeds
+  `broad_interface_threshold`.
+- **Duck typing:** Scores AST-based evidence that concrete receiver method sets
+  satisfy declared non-empty interfaces. It does not run the Go type checker.
+
+All three architecture dimensions are bounded from 0.0 to 10.0. The
+`broad_interface_threshold` setting defaults to 5 methods:
+
+```json
+{
+  "minimum_dimensions": {
+    "cyclic_dependencies": 9.0,
+    "interface_compliance": 9.0,
+    "duck_typing": 9.0
+  },
+  "broad_interface_threshold": 5
+}
+```
+
+##### Cyclic dependencies
+
+A cycle exists when internal packages depend on one another in a loop. For
+example, this dependency chain is cyclic:
+
+```text
+audio -> filter -> audio
+```
+
+The analyzer marks only the packages that participate in the cycle. A package
+that is merely imported by a cyclic package is not penalized. A score of 10.0
+means no internal package cycle was found; a lower score identifies an
+architecture boundary that should be reviewed.
+
+##### Interface compliance
+
+Interface compliance measures whether declared interfaces are useful and
+appropriately sized. For example, an interface that is declared but never
+used contributes to the unused-interface count:
+
+```go
+type AudioLogger interface {
+    Log(frame []float32)
+}
+```
+
+An interface with too many methods is considered broad when it exceeds the
+configured threshold:
+
+```go
+type AudioProcessor interface {
+    Read([]float32) error
+    Write([]float32) error
+    Reset()
+    Configure(sampleRate int)
+    Close() error
+    Metrics() map[string]float64
+}
+```
+
+These are design signals rather than compile errors. A project may
+intentionally use a broad or currently unused interface, so review the
+reported counts before changing code.
+
+##### Duck typing
+
+Go interfaces are satisfied implicitly. In this example, `FileSource` has the
+method required by `AudioSource`, so it is evidence of duck typing:
+
+```go
+type AudioSource interface {
+    Read() ([]float32, error)
+}
+
+type FileSource struct{}
+
+func (FileSource) Read() ([]float32, error) {
+    return nil, nil
+}
+```
+
+The analyzer looks for declared non-empty interfaces and matching concrete
+receiver method sets in the same package. It reports method-set evidence; it
+does not build the project, resolve every cross-package type relationship, or
+replace `go vet` and the Go compiler.
+
+For example, a report may contain:
+
+```json
+{
+  "dimensions": {
+    "cyclic_dependencies": 10.0,
+    "interface_compliance": 9.8,
+    "duck_typing": 9.4
+  },
+  "health": {
+    "import_cycles": 0,
+    "interface_count": 11,
+    "unused_interfaces": 1,
+    "broad_interfaces": 1,
+    "implicit_implementations": 2
+  }
+}
+```
 
 #### Additional health metrics
 

@@ -1,4 +1,4 @@
-# Go Code Health Scoring Model (go-v0.2.0)
+# Go Code Health Scoring Model (go-v0.3.0)
 
 ## Scope and intent
 
@@ -14,6 +14,10 @@ This is a **custom, experimental maintainability heuristic**. It is not SonarQub
 | `structure` | 0.25 | Function length, conditional nesting, and overall file length |
 | `duplication` | 0.20 | Exact lexical token blocks (35-token window) repeated in different functions |
 | `coupling` | 0.15 | Number of distinct imports from the same Go module, aggregated by package directory |
+
+The architecture dimensions `cyclic_dependencies`, `interface_compliance`, and
+`duck_typing` are also reported on the 0–10 scale. They are independently
+thresholded and are not included in the existing overall score.
 
 For each file, the 0–10 overall score is `sum(dimension_score × weight) / sum(available_weights)`, rounded to one decimal place. Each component is bounded to 0–10. If no `go.mod` can be found in the target path or any of its parent directories, `coupling` is `null` and the other weights are renormalized to 1.0.
 
@@ -71,9 +75,22 @@ Find the enclosing `go.mod`. For each package directory, count the number of **d
 
 Each file receives its enclosing package's coupling score. This is a simple structural fan-out proxy: it does not measure symbol-level dependencies, interface abstractions, coupling intensity, architectural boundaries, or semantic cohesion. It does not separately resolve nested Go modules.
 
+### Architecture dimensions
+
+- `cyclic_dependencies` is `10` when a package does not participate in an
+  internal import cycle and `0` when it does.
+- `interface_compliance` starts at `10` and is reduced for unused interfaces
+  and interfaces exceeding the configured broad-interface threshold.
+- `duck_typing` is `10` when every declared non-empty interface has matching
+  concrete method-set evidence in its package; unmatched interfaces reduce the
+  score proportionally.
+- `broad_interface_threshold` defaults to `5` methods and can be set in
+  `.go-code-health.json`.
+
 ## Aggregation
 
-- **File:** four available dimensions combined with the above weights.
+- **File:** four weighted dimensions combined with the above weights, plus
+  three independently reported architecture dimensions.
 - **Package:** source-line-weighted mean of file scores in the package directory.
 - **Repository:** source-line-weighted mean of file scores for all analyzed source files.
 - At aggregation time, each file has weight `max(1, source_lines)`; score rounding to one decimal takes place at each output level.

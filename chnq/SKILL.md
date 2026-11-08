@@ -48,9 +48,11 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
    and do not declare the task complete while the policy is failing. If a
    change intentionally lowers a score, ask the user to approve updated
    thresholds and update the project policy explicitly.
-9. Explain the four `dimensions`: `complexity`, `structure`, `duplication`,
-   and `coupling`. Do not rename the branching complexity heuristic to Sonar
-   cognitive complexity.
+9. Explain the seven reported `dimensions`: `complexity`, `structure`,
+   `duplication`, `coupling`, `cyclic_dependencies`, `interface_compliance`,
+   and `duck_typing`. The last three are independent architecture scores and
+   do not change the existing overall score. Do not rename the branching
+   complexity heuristic to Sonar cognitive complexity.
 10. Prioritize `hotspots` and their grounded `findings`, citing file paths and
    line numbers when available. Distinguish measured data from possible
    refactoring suggestions.
@@ -156,11 +158,12 @@ Use these simple explanations when asking an engineer to choose thresholds:
 
 The report also includes non-scoring health measurements. Documentation
 coverage is a percentage; ignored returns, panics, TODOs, FIXME markers,
-import cycles, dependency depth, incoming dependencies, and Git churn are
-count/risk metrics where lower is generally preferred. Exported symbol,
-goroutine, and channel-operation counts are descriptive and have no universal
-healthy direction. These measurements produce findings where appropriate but
-do not alter the four-dimensional score.
+import cycles, dependency depth, incoming dependencies, unused interfaces,
+broad interfaces, and Git churn are count/risk metrics where lower is
+generally preferred. Exported symbol, goroutine, channel-operation, interface,
+and implicit-implementation counts are descriptive and have no universal
+healthy direction. The three architecture dimensions are independently
+thresholded and do not alter the existing four-dimensional score.
 
 When reporting them, do not list raw values without an outcome. Use this
 format:
@@ -232,7 +235,10 @@ Never invent file paths, findings, counts, or scores. Use the actual JSON output
 ## Interpretation and limitations
 
 - The score estimates **static structural maintainability**, not overall software quality.
-- Four measured dimensions: branching/nesting complexity (40%), function/file structure (25%), exact token duplication (20%), and intra-module package fan-out (15%).
+- Four weighted dimensions: branching/nesting complexity (40%), function/file
+  structure (25%), exact token duplication (20%), and intra-module package
+  fan-out (15%). Three independent architecture dimensions are also reported:
+  cyclic dependencies, interface compliance, and duck typing.
 - Missing `go.mod`: no coupling score; remaining weights are renormalized.
 - Generated files, vendor directories, hidden directories, `testdata`, and `*_test.go` are excluded by default. Test files may be included explicitly.
 - Unsupported: cohesion, semantic duplication, cross-module dependencies,

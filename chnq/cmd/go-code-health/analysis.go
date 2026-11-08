@@ -51,6 +51,11 @@ type sourceFile struct {
 	externalDuplicateTokens    int
 	externalTotalTokens        int
 	totalFunctionTokens        int
+	cycleScore                 float64
+	interfaceScore             float64
+	duckTypingScore            float64
+	interfaces                 []interfaceInfo
+	typeMethods                map[string]map[string]bool
 }
 
 // linecount handles line count
@@ -81,6 +86,7 @@ func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 	}
 	f.imports = collectImports(parsed.Imports)
 	collectHealthMetrics(parsed, f)
+	collectArchitectureMetadata(parsed, f, fset)
 	collectFunctionDeclarations(f, fset, src, parsed.Decls)
 	collectClosures(f, fset, src, parsed)
 	sort.Slice(f.funcs, func(i, j int) bool { return f.funcs[i].report.Line < f.funcs[j].report.Line })

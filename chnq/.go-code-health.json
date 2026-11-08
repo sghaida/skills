@@ -6,7 +6,11 @@
     "complexity": 9.0,
     "structure": 9.0,
     "duplication": 9.0,
-    "coupling": 9.0
+    "coupling": 9.0,
+    "cyclic_dependencies": 9.0,
+    "interface_compliance": 9.0,
+    "duck_typing": 9.0
   },
+  "broad_interface_threshold": 5,
   "include_tests": false
 }

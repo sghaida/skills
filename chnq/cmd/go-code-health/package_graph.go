@@ -69,7 +69,7 @@ func calculatePackageDepths(edges map[string]map[string]bool, health map[string]
 	var visit func(string, []string) int
 	visit = func(packagePath string, stack []string) int {
 		if state[packagePath] == 1 {
-			markPackageCycle(stack, health)
+			markPackageCycle(stack, packagePath, health)
 			return 0
 		}
 		if state[packagePath] == 2 {
@@ -92,8 +92,15 @@ func calculatePackageDepths(edges map[string]map[string]bool, health map[string]
 }
 
 // markpackagecycle handles mark package cycle
-func markPackageCycle(stack []string, health map[string]packageHealth) {
-	for _, name := range stack {
+func markPackageCycle(stack []string, repeated string, health map[string]packageHealth) {
+	start := 0
+	for index, name := range stack {
+		if name == repeated {
+			start = index
+			break
+		}
+	}
+	for _, name := range append(stack[start:], repeated) {
 		value := health[name]
 		value.cycle = true
 		health[name] = value

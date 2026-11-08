@@ -5,28 +5,29 @@
 | Field | Type | Description |
 |---|---|---|
 | `schema_version` | string | Output contract version, currently `1.0` |
-| `scoring_version` | string | Formula identifier, currently `go-v0.2.0` |
+| `scoring_version` | string | Formula identifier, currently `go-v0.3.0` |
 | `language` | string | Always `go` in this implementation |
 | `max_score` | number | Always 10 |
 | `repository` | string | Absolute filesystem path scanned |
 | `code_health_score` | number or null | Repository score (rounded to 0.1), null if incomplete |
 | `classification` | string | excellent/healthy/moderate/unhealthy/critical, or unavailable |
 | `analysis_status` | string | `complete` or `partial` |
-| `dimensions` | object | Complexity/structure/duplication/coupling, each 0–10 or null |
+| `dimensions` | object | Four weighted dimensions plus cyclic dependencies, interface compliance, and duck typing; each 0–10 or null |
 | `summary` | object | Go files, lines, functions, token duplication, exclusions, and health measurements |
 | `packages` | array | Per-directory package score, line counts, internal dependency fan-out/fan-in, and dependency depth |
 | `files` | array | Per-file score, function measurements, duplication, health measurements, and findings |
 | `hotspots` | array | Up to 5 lowest-scoring files under 8, with their full details |
 | `git_hotspots` | array | Present with `--include-git-churn`; up to 5 files with the most changed lines |
-| `configuration` | object | Include-tests, Git churn, duplication window, and engine settings |
+| `configuration` | object | Include-tests, Git churn, duplication window, engine, and broad-interface threshold settings |
 | `warnings` | array | Analysis warnings, including missing `go.mod` or parse failures |
 
-`files[].functions[]` includes names, starting line, source line count, `branching_complexity`, and `max_nesting`. `files[].findings[]` includes `rule`, `severity`, optional `line`, and `message`. `files[].dimensions` is the same four-dimension breakdown as the repository.
+`files[].functions[]` includes names, starting line, source line count, `branching_complexity`, and `max_nesting`. `files[].findings[]` includes `rule`, `severity`, optional `line`, and `message`. `files[].dimensions` is the same seven-dimension breakdown as the repository. The three architecture dimensions are reported independently and do not change `code_health_score`.
 
 The `health` object includes exported symbols, documentation coverage,
 discarded return values, panics, TODO/FIXME markers, goroutines, channel
-operations, import cycles, dependency depth, incoming dependencies, and
-optional Git changed-line counts. Health measurements do not affect the
+operations, import cycles, dependency depth, incoming dependencies, interface
+counts, unused and broad interfaces, implicit implementations, and optional
+Git changed-line counts. Health measurements do not affect the existing
 four-dimensional score.
 
 ## Exit codes

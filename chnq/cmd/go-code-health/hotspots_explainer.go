@@ -247,17 +247,20 @@ func (he *HotspotsExplainer) writeSummaryTable(sb *strings.Builder, hotspots []F
 		return
 	}
 
-	sb.WriteString("| Hotspot | Overall | Complexity | Structure | Duplication | Coupling |\n")
-	sb.WriteString("|---------|---------|------------|-----------|-------------|----------|\n")
+	sb.WriteString("| Hotspot | Overall | Complexity | Structure | Duplication | Coupling | Cycles | Interfaces | Duck typing |\n")
+	sb.WriteString("|---------|---------|------------|-----------|-------------|----------|--------|------------|-------------|\n")
 
 	for _, h := range hotspots {
-		_, _ = fmt.Fprintf(sb, "| %s | **%.1f** | %.1f | %.1f | %.1f | %.1f |\n",
+		_, _ = fmt.Fprintf(sb, "| %s | **%.1f** | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n",
 			h.Path,
 			h.Score,
 			getFloatValue(h.Dimensions.Complexity),
 			getFloatValue(h.Dimensions.Structure),
 			getFloatValue(h.Dimensions.Duplication),
 			getFloatValue(h.Dimensions.Coupling),
+			getFloatValue(h.Dimensions.CyclicDependencies),
+			getFloatValue(h.Dimensions.InterfaceCompliance),
+			getFloatValue(h.Dimensions.DuckTyping),
 		)
 	}
 	sb.WriteString("\n")
@@ -313,6 +316,10 @@ func addHotspotFile(groups map[string]*hotspotAggregate, file FileReport) {
 	group.report.Health.FIXMEs += file.Health.FIXMEs
 	group.report.Health.Goroutines += file.Health.Goroutines
 	group.report.Health.ChannelOperations += file.Health.ChannelOperations
+	group.report.Health.InterfaceCount += file.Health.InterfaceCount
+	group.report.Health.UnusedInterfaces += file.Health.UnusedInterfaces
+	group.report.Health.BroadInterfaces += file.Health.BroadInterfaces
+	group.report.Health.ImplicitImplementations += file.Health.ImplicitImplementations
 	group.report.Dimensions = averageDimensions(group.report.Dimensions, file.Dimensions, group.count)
 }
 
@@ -343,10 +350,13 @@ func averageDimensions(current, next Dimensions, count int) Dimensions {
 		return &value
 	}
 	return Dimensions{
-		Complexity:  average(current.Complexity, next.Complexity),
-		Structure:   average(current.Structure, next.Structure),
-		Duplication: average(current.Duplication, next.Duplication),
-		Coupling:    average(current.Coupling, next.Coupling),
+		Complexity:          average(current.Complexity, next.Complexity),
+		Structure:           average(current.Structure, next.Structure),
+		Duplication:         average(current.Duplication, next.Duplication),
+		Coupling:            average(current.Coupling, next.Coupling),
+		CyclicDependencies:  average(current.CyclicDependencies, next.CyclicDependencies),
+		InterfaceCompliance: average(current.InterfaceCompliance, next.InterfaceCompliance),
+		DuckTyping:          average(current.DuckTyping, next.DuckTyping),
 	}
 }
 

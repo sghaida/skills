@@ -20,7 +20,8 @@ const (
 
 // projectconfig represents project config data
 type projectConfig struct {
-	DuplicationEngine string `json:"duplication_engine"`
+	DuplicationEngine       string `json:"duplication_engine"`
+	BroadInterfaceThreshold int    `json:"broad_interface_threshold"`
 }
 
 // jscpdstatistic represents jscpd statistic data
@@ -46,23 +47,34 @@ type jscpdReport struct {
 
 // loadduplicationengine handles load duplication engine
 func loadDuplicationEngine(root string) (string, error) {
-	configPath := filepath.Join(root, ".go-code-health.json")
-	data, err := os.ReadFile(configPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return duplicationEngineInternal, nil
-	}
+	config, err := loadProjectConfig(root)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", configPath, err)
-	}
-
-	var config projectConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return "", fmt.Errorf("parse %s: %w", configPath, err)
+		return "", err
 	}
 	if config.DuplicationEngine == "" {
 		return duplicationEngineInternal, nil
 	}
-	return validateDuplicationEngine(config.DuplicationEngine, configPath)
+	return validateDuplicationEngine(config.DuplicationEngine, filepath.Join(root, ".go-code-health.json"))
+}
+
+func loadProjectConfig(root string) (projectConfig, error) {
+	configPath := filepath.Join(root, ".go-code-health.json")
+	data, err := os.ReadFile(configPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return projectConfig{BroadInterfaceThreshold: defaultBroadInterfaceThreshold}, nil
+	}
+	if err != nil {
+		return projectConfig{}, fmt.Errorf("read %s: %w", configPath, err)
+	}
+
+	var config projectConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return projectConfig{}, fmt.Errorf("parse %s: %w", configPath, err)
+	}
+	if config.BroadInterfaceThreshold < 1 {
+		config.BroadInterfaceThreshold = defaultBroadInterfaceThreshold
+	}
+	return config, nil
 }
 
 // validateduplicationengine handles validate duplication engine

@@ -14,14 +14,17 @@ import (
 	"time"
 )
 
-const scoringVersion = "go-v0.2.0"
+const scoringVersion = "go-v0.3.0"
 
 // dimensions contains the analyzer's four maintainability dimension scores
 type Dimensions struct {
-	Complexity  *float64 `json:"complexity"`
-	Structure   *float64 `json:"structure"`
-	Duplication *float64 `json:"duplication"`
-	Coupling    *float64 `json:"coupling"`
+	Complexity          *float64 `json:"complexity"`
+	Structure           *float64 `json:"structure"`
+	Duplication         *float64 `json:"duplication"`
+	Coupling            *float64 `json:"coupling"`
+	CyclicDependencies  *float64 `json:"cyclic_dependencies"`
+	InterfaceCompliance *float64 `json:"interface_compliance"`
+	DuckTyping          *float64 `json:"duck_typing"`
 }
 
 // healthmetrics contains measured health indicators for analyzed go files
@@ -39,6 +42,10 @@ type HealthMetrics struct {
 	DependencyDepth           int     `json:"dependency_depth"`
 	IncomingDependencies      int     `json:"incoming_dependencies"`
 	GitChurn                  int     `json:"git_churn,omitempty"`
+	InterfaceCount            int     `json:"interface_count"`
+	UnusedInterfaces          int     `json:"unused_interfaces"`
+	BroadInterfaces           int     `json:"broad_interfaces"`
+	ImplicitImplementations   int     `json:"implicit_implementations"`
 }
 
 // finding describes a measured analyzer finding
@@ -77,13 +84,14 @@ type FileReport struct {
 
 // packagereport contains aggregated metrics for one go package
 type PackageReport struct {
-	Path                 string  `json:"path"`
-	Score                float64 `json:"code_health_score"`
-	Files                int     `json:"files"`
-	Lines                int     `json:"lines"`
-	InternalDependencies int     `json:"internal_dependencies"`
-	IncomingDependencies int     `json:"incoming_dependencies"`
-	DependencyDepth      int     `json:"dependency_depth"`
+	Path                 string     `json:"path"`
+	Score                float64    `json:"code_health_score"`
+	Files                int        `json:"files"`
+	Lines                int        `json:"lines"`
+	InternalDependencies int        `json:"internal_dependencies"`
+	IncomingDependencies int        `json:"incoming_dependencies"`
+	DependencyDepth      int        `json:"dependency_depth"`
+	Dimensions           Dimensions `json:"dimensions"`
 }
 
 // summary contains aggregate metrics for the analyzed repository
@@ -101,10 +109,11 @@ type Summary struct {
 
 // configuration records the analyzer options used for a report
 type Configuration struct {
-	IncludeTests          bool   `json:"include_tests"`
-	IncludeGitChurn       bool   `json:"include_git_churn"`
-	DuplicateWindowTokens int    `json:"duplicate_window_tokens"`
-	DuplicationEngine     string `json:"duplication_engine"`
+	IncludeTests            bool   `json:"include_tests"`
+	IncludeGitChurn         bool   `json:"include_git_churn"`
+	DuplicateWindowTokens   int    `json:"duplicate_window_tokens"`
+	DuplicationEngine       string `json:"duplication_engine"`
+	BroadInterfaceThreshold int    `json:"broad_interface_threshold"`
 }
 
 // report is the complete json-serializable analyzer result
@@ -158,8 +167,9 @@ func writeTextHeader(w io.Writer, report Report) {
 		_, _ = fmt.Fprintf(w, "Go Code Health: %.1f/10 (%s)\n", *report.CodeHealthScore, report.Classification)
 	}
 	_, _ = fmt.Fprintf(w, "Analyzed: %d files, %d functions, %d source lines | Score model: %s\n", report.Summary.GoFiles, report.Summary.Functions, report.Summary.SourceLines, report.ScoringVersion)
-	_, _ = fmt.Fprintf(w, "Dimensions: Complexity %s | Structure %s | Duplication %s | Coupling %s\n",
-		scoreLabel(report.Dimensions.Complexity), scoreLabel(report.Dimensions.Structure), scoreLabel(report.Dimensions.Duplication), scoreLabel(report.Dimensions.Coupling))
+	_, _ = fmt.Fprintf(w, "Dimensions: Complexity %s | Structure %s | Duplication %s | Coupling %s | Cycles %s | Interfaces %s | Duck typing %s\n",
+		scoreLabel(report.Dimensions.Complexity), scoreLabel(report.Dimensions.Structure), scoreLabel(report.Dimensions.Duplication), scoreLabel(report.Dimensions.Coupling),
+		scoreLabel(report.Dimensions.CyclicDependencies), scoreLabel(report.Dimensions.InterfaceCompliance), scoreLabel(report.Dimensions.DuckTyping))
 	_, _ = fmt.Fprintf(w, "Exact duplicate function tokens: %.1f%%\n", report.Summary.DuplicationPercent)
 }
 
