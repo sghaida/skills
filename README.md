@@ -402,6 +402,10 @@ hook to run the same checks before every commit:
 make install-hooks
 ```
 
+GitHub Actions runs the same precheck and publishes Go coverage to Codacy.
+Add a repository secret named `CODACY_PROJECT_TOKEN` before enabling the
+Codacy upload step.
+
 ### Contributing
 
 Contributions should be focused, preserve the analyzer's deterministic

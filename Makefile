@@ -14,11 +14,13 @@ BIN := $(BUILD_DIR)/go-code-health
 TARGET ?= $(PROJECT_DIR)
 FORMAT ?= json
 ARGS ?=
+CODACY_COVERAGE_REPORTER_URL ?= https://coverage.codacy.com/get.sh
+COVERAGE_PROFILE ?= $(PROJECT_DIR)/coverage.out
 -include $(ROOT)/.golint.config
 CLAUDE_SKILLS_DIR ?= $(HOME)/.claude/skills
 CLAUDE_SKILL_DIR := $(CLAUDE_SKILLS_DIR)/go-code-health
 
-.PHONY: help deps install-deps build run cmd fmt tidy test test-cover coverage vet install-golangci-lint lint precheck install-hooks install-claude install-codex install-github install-jscpd-rs clean
+.PHONY: help deps install-deps build run cmd fmt tidy test test-cover coverage coverage-report coverage-codacy vet install-golangci-lint lint precheck install-hooks install-claude install-codex install-github install-jscpd-rs clean
 
 help:
 	@printf '%s\n' \
@@ -32,6 +34,8 @@ help:
 	  'make test             Run all Go tests' \
 	  'make test-cover       Run tests and report production-file coverage' \
 	  'make coverage         Run tests and require 90% coverage per Go source file' \
+	  'make coverage-report  Generate coverage.out for Codacy' \
+	  'make coverage-codacy  Upload coverage.out to Codacy' \
 	  'make vet              Run go vet' \
 	  'make precheck         Run formatting, tidy, tests, vet, and lint' \
 	  'make lint             Install latest golangci-lint and run it' \
@@ -91,6 +95,16 @@ test-cover:
 	awk 'NR == 1 { next } { split($$1, location, ":"); file = location[1]; if (file ~ /_test\.go$$/) next; total[file] += $$2; if ($$3 > 0) covered[file] += $$2 } END { failed = 0; for (file in total) { percentage = 100 * covered[file] / total[file]; printf "%6.1f%% %s\n", percentage, file; if (percentage < 90) failed = 1 } exit failed }' "$$profile"
 
 coverage: test-cover
+
+coverage-report: coverage
+	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) test ./... -coverprofile="$(COVERAGE_PROFILE)" -covermode=atomic
+
+coverage-codacy: coverage-report
+	@test -n "$(CODACY_PROJECT_TOKEN)" || { printf 'CODACY_PROJECT_TOKEN is required\n' >&2; exit 2; }
+	@command -v curl >/dev/null 2>&1 || { printf 'curl is required to upload coverage to Codacy\n' >&2; exit 2; }
+	@CODACY_PROJECT_TOKEN="$(CODACY_PROJECT_TOKEN)" COVERAGE_PROFILE="$(COVERAGE_PROFILE)" \
+	  CODACY_COVERAGE_REPORTER_URL="$(CODACY_COVERAGE_REPORTER_URL)" \
+	  bash -c 'set -eu; bash <(curl -Ls "$$CODACY_COVERAGE_REPORTER_URL") report --project-token "$$CODACY_PROJECT_TOKEN" --coverage-reports "$$COVERAGE_PROFILE" --language go'
 
 vet:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) vet ./...
