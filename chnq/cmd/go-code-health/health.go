@@ -107,13 +107,15 @@ func collectExportedFunction(declaration *ast.FuncDecl, file *sourceFile) {
 // collectexportedspecs handles collect exported specs
 func collectExportedSpecs(declaration *ast.GenDecl, file *sourceFile) {
 	for _, spec := range declaration.Specs {
-		names := exportedSpecNames(spec)
-		for range names {
-			file.exportedSymbols++
-			if hasSpecDocumentation(declaration, spec) {
-				file.documentedExportedSymbols++
-			}
-		}
+		collectExportedSpec(spec, declaration, file)
+	}
+}
+
+func collectExportedSpec(spec ast.Spec, declaration *ast.GenDecl, file *sourceFile) {
+	names := exportedSpecNames(spec)
+	file.exportedSymbols += len(names)
+	if len(names) > 0 && hasSpecDocumentation(declaration, spec) {
+		file.documentedExportedSymbols += len(names)
 	}
 }
 

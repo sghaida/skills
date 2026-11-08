@@ -16,22 +16,31 @@ type packageHealth struct {
 
 // analyzepackagegraph handles analyze package graph
 func analyzePackageGraph(files []*sourceFile, module string) map[string]packageHealth {
+	edges := buildPackageEdges(files, module)
+	health := initializePackageHealth(edges)
+	recordIncomingDependencies(edges, health)
+	calculatePackageDepths(edges, health)
+	return health
+}
+
+func buildPackageEdges(files []*sourceFile, module string) map[string]map[string]bool {
 	edges := map[string]map[string]bool{}
 	for _, file := range files {
 		if edges[file.packagePath] == nil {
 			edges[file.packagePath] = map[string]bool{}
 		}
-		for _, imp := range file.imports {
-			if withinModule(imp, module) {
-				target := strings.TrimPrefix(imp, module+"/")
-				edges[file.packagePath][target] = true
-			}
+		addPackageEdges(edges[file.packagePath], file.imports, module)
+	}
+	return edges
+}
+
+func addPackageEdges(edges map[string]bool, imports []string, module string) {
+	for _, imp := range imports {
+		if withinModule(imp, module) {
+			target := strings.TrimPrefix(imp, module+"/")
+			edges[target] = true
 		}
 	}
-	health := initializePackageHealth(edges)
-	recordIncomingDependencies(edges, health)
-	calculatePackageDepths(edges, health)
-	return health
 }
 
 // initializepackagehealth handles initialize package health

@@ -116,12 +116,16 @@ func analyzeParsedFiles(inputs *analysisInputs, includeGitChurn bool, workers in
 			return err
 		}
 	}
-	if err := detectProjectDuplication(inputs.root, parsedFiles, inputs.duplicationEngine, &inputs.summary); err != nil {
+	if err := completeDuplicationAnalysis(inputs, parsedFiles); err != nil {
 		return err
 	}
 	finalizeDuplicationSummary(parsedFiles, inputs.duplicationEngine, &inputs.summary)
 	inputs.report.Summary = inputs.summary
 	return postProcessReport(&inputs.report, parsedFiles, includeGitChurn, inputs.module != "")
+}
+
+func completeDuplicationAnalysis(inputs *analysisInputs, parsedFiles []*sourceFile) error {
+	return detectProjectDuplication(inputs.root, parsedFiles, inputs.duplicationEngine, &inputs.summary)
 }
 
 // postprocessreport handles post process report
@@ -219,18 +223,25 @@ func applyGitChurn(root string, files []*sourceFile, summary *Summary) error {
 func parseGitChurn(output string) map[string]int {
 	byPath := map[string]int{}
 	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 || parts[0] == "-" || parts[1] == "-" {
-			continue
+		path, churn, ok := parseGitChurnLine(line)
+		if ok {
+			byPath[path] += churn
 		}
-		added, addErr := strconv.Atoi(parts[0])
-		deleted, deleteErr := strconv.Atoi(parts[1])
-		if addErr != nil || deleteErr != nil {
-			continue
-		}
-		byPath[filepath.ToSlash(parts[2])] += added + deleted
 	}
 	return byPath
+}
+
+func parseGitChurnLine(line string) (string, int, bool) {
+	parts := strings.SplitN(line, "\t", 3)
+	if len(parts) != 3 || parts[0] == "-" || parts[1] == "-" {
+		return "", 0, false
+	}
+	added, addErr := strconv.Atoi(parts[0])
+	deleted, deleteErr := strconv.Atoi(parts[1])
+	if addErr != nil || deleteErr != nil {
+		return "", 0, false
+	}
+	return filepath.ToSlash(parts[2]), added + deleted, true
 }
 
 // assigngitchurn handles assign git churn

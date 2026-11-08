@@ -148,15 +148,19 @@ func (cm *CacheManager) WriteCache(report *Report, codeHash string, scanDuration
 // populatefilehashes handles populate file hashes
 func (cm *CacheManager) populateFileHashes(cache *CacheFile, files []FileReport, roots []string) {
 	for _, file := range files {
-		filePath := file.Path
-		if len(roots) > 0 && roots[0] != "" {
-			filePath = filepath.Join(roots[0], filepath.FromSlash(file.Path))
-		}
+		filePath := cacheFilePath(file.Path, roots)
 		hash, err := cm.ComputeFileHash(filePath)
 		if err == nil {
 			cache.FilesHashMap[file.Path] = hash
 		}
 	}
+}
+
+func cacheFilePath(path string, roots []string) string {
+	if len(roots) > 0 && roots[0] != "" {
+		return filepath.Join(roots[0], filepath.FromSlash(path))
+	}
+	return path
 }
 
 // validatecache checks if cache is valid

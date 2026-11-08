@@ -156,20 +156,22 @@ func duplicateCoverage(fn *functionData) int {
 
 // complexityforfunction maps branching complexity to a 0-to-10 score
 func complexityForFunction(v int) float64 {
-	switch {
-	case v <= 5:
-		return 10
-	case v <= 10:
-		return 8
-	case v <= 15:
-		return 6
-	case v <= 25:
-		return 4
-	case v <= 40:
-		return 2
-	default:
-		return 0
+	thresholds := []struct {
+		max   int
+		score float64
+	}{
+		{5, 10},
+		{10, 8},
+		{15, 6},
+		{25, 4},
+		{40, 2},
 	}
+	for _, threshold := range thresholds {
+		if v <= threshold.max {
+			return threshold.score
+		}
+	}
+	return 0
 }
 
 // complexityForFile combines function complexity using a line-weighted average

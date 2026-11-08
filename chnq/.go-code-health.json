@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "duplication_engine": "jscpd-rs",
+  "minimum_score": 9.0,
+  "minimum_dimensions": {
+    "complexity": 9.0,
+    "structure": 9.0,
+    "duplication": 9.0,
+    "coupling": 9.0
+  },
+  "include_tests": false
+}

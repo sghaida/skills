@@ -30,12 +30,13 @@ func (iu *IncrementalUpdate) mergeFileReports() map[string]*FileReport {
 
 // addunchangedfiles handles add unchanged files
 func (iu *IncrementalUpdate) addUnchangedFiles(fileMap map[string]*FileReport) {
-	if iu.oldCache != nil && iu.oldCache.Report != nil {
-		for i := range iu.oldCache.Report.Files {
-			f := &iu.oldCache.Report.Files[i]
-			if !iu.changedFiles[f.Path] {
-				fileMap[f.Path] = f
-			}
+	if iu.oldCache == nil || iu.oldCache.Report == nil {
+		return
+	}
+	for i := range iu.oldCache.Report.Files {
+		f := &iu.oldCache.Report.Files[i]
+		if !iu.changedFiles[f.Path] {
+			fileMap[f.Path] = f
 		}
 	}
 }

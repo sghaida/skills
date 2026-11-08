@@ -85,12 +85,7 @@ type parseResult struct {
 // parsesourcefiles handles parse source files
 func parseSourceFiles(paths []string, root string, summary *Summary, report *Report, workers int) ([]*sourceFile, error) {
 	rootDir := moduleSearchRoot(root)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(paths) {
-		workers = len(paths)
-	}
+	workers = normalizeWorkerCount(workers, len(paths))
 
 	jobs := make(chan int)
 	results := make(chan parseResult, len(paths))
@@ -100,20 +95,40 @@ func parseSourceFiles(paths []string, root string, summary *Summary, report *Rep
 
 	parsedFiles := make([]*sourceFile, 0, len(paths))
 	for _, item := range ordered {
-		if item.err != nil {
-			return nil, item.err
+		file, err := addParseResult(item, summary, report)
+		if err != nil {
+			return nil, err
 		}
-		summary.ExcludedGeneratedFiles += item.summary.ExcludedGeneratedFiles
-		report.Warnings = append(report.Warnings, item.report.Warnings...)
-		if !item.ok {
-			continue
+		if file != nil {
+			parsedFiles = append(parsedFiles, file)
 		}
-		parsedFiles = append(parsedFiles, item.file)
-		summary.GoFiles++
-		summary.SourceLines += item.file.lines
-		summary.Functions += len(item.file.funcs)
 	}
 	return parsedFiles, nil
+}
+
+func normalizeWorkerCount(workers, pathCount int) int {
+	if workers < 1 {
+		return 1
+	}
+	if workers > pathCount {
+		return pathCount
+	}
+	return workers
+}
+
+func addParseResult(item parseResult, summary *Summary, report *Report) (*sourceFile, error) {
+	if item.err != nil {
+		return nil, item.err
+	}
+	summary.ExcludedGeneratedFiles += item.summary.ExcludedGeneratedFiles
+	report.Warnings = append(report.Warnings, item.report.Warnings...)
+	if !item.ok {
+		return nil, nil
+	}
+	summary.GoFiles++
+	summary.SourceLines += item.file.lines
+	summary.Functions += len(item.file.funcs)
+	return item.file, nil
 }
 
 // startparseworkers handles start parse workers

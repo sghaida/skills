@@ -226,6 +226,9 @@ func (he *HotspotsExplainer) extractBehaviorPatterns(filePath string) string {
 		appendDetectedPattern(&patterns, patternsFound, line, "errors", errorTypeRx,
 			"- Error classification: Type assertions and special cases\n")
 	}
+	if err := scanner.Err(); err != nil {
+		patterns.WriteString("- Unable to complete behavior pattern scan (read error)\n")
+	}
 
 	return patterns.String()
 }
@@ -266,37 +269,55 @@ func (he *HotspotsExplainer) scopedHotspots() []FileReport {
 		return he.report.Hotspots
 	}
 
-	// aggregate represents aggregate data
-	type aggregate struct {
-		report FileReport
-		count  int
-	}
-	groups := make(map[string]*aggregate)
+	groups := make(map[string]*hotspotAggregate)
 	for _, file := range he.report.Files {
-		if file.Score >= 8 {
-			continue
-		}
-		group := groups[file.Package]
-		if group == nil {
-			group = &aggregate{report: FileReport{Path: file.Package, Package: file.Package}}
-			groups[file.Package] = group
-		}
-		group.count++
-		group.report.Score += file.Score
-		group.report.Lines += file.Lines
-		group.report.InternalImports += file.InternalImports
-		group.report.DuplicateTokens += file.DuplicateTokens
-		group.report.TotalFunctionTokens += file.TotalFunctionTokens
-		group.report.Functions = append(group.report.Functions, file.Functions...)
-		group.report.Health.IgnoredReturnValues += file.Health.IgnoredReturnValues
-		group.report.Health.Panics += file.Health.Panics
-		group.report.Health.TODOs += file.Health.TODOs
-		group.report.Health.FIXMEs += file.Health.FIXMEs
-		group.report.Health.Goroutines += file.Health.Goroutines
-		group.report.Health.ChannelOperations += file.Health.ChannelOperations
-		group.report.Dimensions = averageDimensions(group.report.Dimensions, file.Dimensions, group.count)
+		addHotspotFile(groups, file)
 	}
 
+	result := finalizeHotspotGroups(groups)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Score == result[j].Score {
+			return result[i].Path < result[j].Path
+		}
+		return result[i].Score < result[j].Score
+	})
+	return result
+}
+
+// hotspotAggregate stores package-level hotspot data before finalization.
+type hotspotAggregate struct {
+	report FileReport
+	count  int
+}
+
+// addHotspotFile adds a low-scoring file to its package aggregate.
+func addHotspotFile(groups map[string]*hotspotAggregate, file FileReport) {
+	if file.Score >= 8 {
+		return
+	}
+	group := groups[file.Package]
+	if group == nil {
+		group = &hotspotAggregate{report: FileReport{Path: file.Package, Package: file.Package}}
+		groups[file.Package] = group
+	}
+	group.count++
+	group.report.Score += file.Score
+	group.report.Lines += file.Lines
+	group.report.InternalImports += file.InternalImports
+	group.report.DuplicateTokens += file.DuplicateTokens
+	group.report.TotalFunctionTokens += file.TotalFunctionTokens
+	group.report.Functions = append(group.report.Functions, file.Functions...)
+	group.report.Health.IgnoredReturnValues += file.Health.IgnoredReturnValues
+	group.report.Health.Panics += file.Health.Panics
+	group.report.Health.TODOs += file.Health.TODOs
+	group.report.Health.FIXMEs += file.Health.FIXMEs
+	group.report.Health.Goroutines += file.Health.Goroutines
+	group.report.Health.ChannelOperations += file.Health.ChannelOperations
+	group.report.Dimensions = averageDimensions(group.report.Dimensions, file.Dimensions, group.count)
+}
+
+// finalizeHotspotGroups converts package aggregates to reports.
+func finalizeHotspotGroups(groups map[string]*hotspotAggregate) []FileReport {
 	result := make([]FileReport, 0, len(groups))
 	for _, group := range groups {
 		group.report.Score /= float64(group.count)
@@ -306,12 +327,6 @@ func (he *HotspotsExplainer) scopedHotspots() []FileReport {
 		}
 		result = append(result, group.report)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Score == result[j].Score {
-			return result[i].Path < result[j].Path
-		}
-		return result[i].Score < result[j].Score
-	})
 	return result
 }
 

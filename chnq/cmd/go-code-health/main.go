@@ -326,9 +326,8 @@ func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[
 		return nil, nil
 	}
 
-	cached, err := cacheMgr.ReadCache()
-	if err != nil || cached == nil || cached.Version != scoringVersion ||
-		cached.Report == nil || len(cached.FilesHashMap) == 0 {
+	cached, ok := readUsableCache(cacheMgr)
+	if !ok {
 		return nil, nil
 	}
 
@@ -337,12 +336,25 @@ func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[
 		return nil, nil
 	}
 
-	changedFiles := IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
+	changedFiles := changedCacheFiles(cached, currentFiles)
 	if len(changedFiles) == 0 || len(changedFiles) >= len(currentFiles) {
 		return nil, nil
 	}
 
 	return cached, changedFiles
+}
+
+func readUsableCache(cacheMgr *CacheManager) (*CacheFile, bool) {
+	cached, err := cacheMgr.ReadCache()
+	if err != nil || cached == nil || cached.Version != scoringVersion ||
+		cached.Report == nil || len(cached.FilesHashMap) == 0 {
+		return nil, false
+	}
+	return cached, true
+}
+
+func changedCacheFiles(cached *CacheFile, currentFiles map[string]string) map[string]bool {
+	return IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
 }
 
 // performanalysis handles perform analysis

@@ -79,14 +79,29 @@ func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 		lines:       lineCount(src),
 		funcs:       make([]*functionData, 0),
 	}
-	for _, i := range parsed.Imports {
-		importPath, e := strconv.Unquote(i.Path.Value)
-		if e == nil {
-			f.imports = append(f.imports, importPath)
+	f.imports = collectImports(parsed.Imports)
+	collectHealthMetrics(parsed, f)
+	collectFunctionDeclarations(f, fset, src, parsed.Decls)
+	collectClosures(f, fset, src, parsed)
+	sort.Slice(f.funcs, func(i, j int) bool { return f.funcs[i].report.Line < f.funcs[j].report.Line })
+	return f, nil
+}
+
+// collectImports extracts import paths that can be unquoted.
+func collectImports(specs []*ast.ImportSpec) []string {
+	imports := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err == nil {
+			imports = append(imports, importPath)
 		}
 	}
-	collectHealthMetrics(parsed, f)
-	for _, decl := range parsed.Decls {
+	return imports
+}
+
+// collectFunctionDeclarations records top-level functions and methods.
+func collectFunctionDeclarations(f *sourceFile, fset *token.FileSet, src []byte, declarations []ast.Decl) {
+	for _, decl := range declarations {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
 			continue
@@ -97,7 +112,10 @@ func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 		}
 		appendFunctionData(f, fset, src, name, fn.Body, fn.Pos(), fn.End())
 	}
-	// A closure receives an independent score and is not double-counted in its parent.
+}
+
+// collectClosures records closures separately from their enclosing functions.
+func collectClosures(f *sourceFile, fset *token.FileSet, src []byte, parsed *ast.File) {
 	ast.Inspect(parsed, func(n ast.Node) bool {
 		if lit, ok := n.(*ast.FuncLit); ok {
 			appendFunctionData(f, fset, src, fmt.Sprintf("closure@%d", fset.Position(lit.Pos()).Line),
@@ -105,8 +123,6 @@ func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 		}
 		return true
 	})
-	sort.Slice(f.funcs, func(i, j int) bool { return f.funcs[i].report.Line < f.funcs[j].report.Line })
-	return f, nil
 }
 
 // appendfunctiondata handles append function data
@@ -283,12 +299,20 @@ func nextScannedToken(s *scanner.Scanner, file *token.File, excluded []tokenSpan
 	offset := file.Offset(position)
 	advanceExcludedSpans(offset, excluded, spanIndex, inExcluded)
 	if isExcludedOffset(offset, excluded, *spanIndex) {
-		if !*inExcluded {
-			*inExcluded = true
-			return "<nested-function-body>", false, true
-		}
+		return excludedToken(inExcluded)
+	}
+	return formatScannedToken(tok, literal)
+}
+
+func excludedToken(inExcluded *bool) (string, bool, bool) {
+	if *inExcluded {
 		return "", false, false
 	}
+	*inExcluded = true
+	return "<nested-function-body>", false, true
+}
+
+func formatScannedToken(tok token.Token, literal string) (string, bool, bool) {
 	if tok.IsLiteral() {
 		return tok.String() + ":" + literal, false, true
 	}
