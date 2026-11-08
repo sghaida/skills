@@ -204,7 +204,14 @@ func scoreDimensions(d Dimensions) float64 {
 // fileScore builds a file report from analyzed metrics and emits threshold
 // findings for complexity, size, duplication, coupling, and nesting.
 func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
-	dup := percent(f.duplicateTokens, f.totalFunctionTokens)
+	duplicateTokens := f.duplicateTokens
+	totalFunctionTokens := f.totalFunctionTokens
+	dup := percent(duplicateTokens, totalFunctionTokens)
+	if f.externalDuplicationPercent != nil {
+		dup = *f.externalDuplicationPercent
+		duplicateTokens = f.externalDuplicateTokens
+		totalFunctionTokens = f.externalTotalTokens
+	}
 	d := Dimensions{
 		Complexity:  ptr(round1(complexityForFile(f))),
 		Structure:   ptr(round1(structureForFile(f))),
@@ -217,7 +224,7 @@ func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 	r := FileReport{
 		Path: f.path, Package: f.packageName, Score: score, Classification: classification(score),
 		Lines: f.lines, Functions: []FunctionReport{}, InternalImports: f.internalImports,
-		DuplicateTokens: f.duplicateTokens, TotalFunctionTokens: f.totalFunctionTokens,
+		DuplicateTokens: duplicateTokens, TotalFunctionTokens: totalFunctionTokens,
 		DuplicationPercent: dup, Dimensions: d, Findings: []Finding{},
 	}
 	for _, fn := range f.funcs {

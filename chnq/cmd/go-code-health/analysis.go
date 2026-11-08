@@ -26,16 +26,19 @@ type functionData struct {
 }
 
 type sourceFile struct {
-	path                string
-	packagePath         string
-	packageName         string
-	lines               int
-	imports             []string
-	funcs               []*functionData
-	internalImports     int
-	packageFanOut       int
-	duplicateTokens     int
-	totalFunctionTokens int
+	path                       string
+	packagePath                string
+	packageName                string
+	lines                      int
+	imports                    []string
+	funcs                      []*functionData
+	internalImports            int
+	packageFanOut              int
+	duplicateTokens            int
+	externalDuplicationPercent *float64
+	externalDuplicateTokens    int
+	externalTotalTokens        int
+	totalFunctionTokens        int
 }
 
 func lineCount(src []byte) int {
@@ -304,6 +307,10 @@ func analyze(path string, includeTests bool) (Report, error) {
 	if len(paths) == 0 {
 		return Report{}, fmt.Errorf("no eligible Go files found in %q", root)
 	}
+	duplicationEngine, err := loadDuplicationEngine(root)
+	if err != nil {
+		return Report{}, err
+	}
 	module, _ := locateModule(root)
 	report := Report{
 		SchemaVersion:  "1.0",
@@ -313,6 +320,7 @@ func analyze(path string, includeTests bool) (Report, error) {
 		Configuration: Configuration{
 			IncludeTests:          includeTests,
 			DuplicateWindowTokens: 35,
+			DuplicationEngine:     duplicationEngine,
 		},
 		Repository:     root,
 		AnalysisStatus: "complete",
@@ -376,12 +384,22 @@ func analyze(path string, includeTests bool) (Report, error) {
 	for _, f := range parsedFiles {
 		f.packageFanOut = len(deps[f.packagePath])
 	}
-	detectDuplicates(parsedFiles, 35)
-	for _, f := range parsedFiles {
-		summary.DuplicateTokens += f.duplicateTokens
-		summary.FunctionTokens += f.totalFunctionTokens
+	if duplicationEngine == duplicationEngineJSCPDRS {
+		if err := detectWithJSCPDRS(root, parsedFiles, &summary); err != nil {
+			return Report{}, err
+		}
+	} else {
+		detectDuplicates(parsedFiles, 35)
 	}
-	summary.DuplicationPercent = percent(summary.DuplicateTokens, summary.FunctionTokens)
+	for _, f := range parsedFiles {
+		if duplicationEngine == duplicationEngineInternal {
+			summary.DuplicateTokens += f.duplicateTokens
+			summary.FunctionTokens += f.totalFunctionTokens
+		}
+	}
+	if duplicationEngine == duplicationEngineInternal {
+		summary.DuplicationPercent = percent(summary.DuplicateTokens, summary.FunctionTokens)
+	}
 	report.Summary = summary
 	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, module != "")
 	if len(report.Warnings) != 0 {

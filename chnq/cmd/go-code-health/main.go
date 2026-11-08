@@ -72,8 +72,9 @@ type Summary struct {
 }
 
 type Configuration struct {
-	IncludeTests          bool `json:"include_tests"`
-	DuplicateWindowTokens int  `json:"duplicate_window_tokens"`
+	IncludeTests          bool   `json:"include_tests"`
+	DuplicateWindowTokens int    `json:"duplicate_window_tokens"`
+	DuplicationEngine     string `json:"duplication_engine"`
 }
 
 type Report struct {
