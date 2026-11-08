@@ -16,6 +16,65 @@ agent-enabled development environment.
 returns a deterministic, explainable 0–10 structural maintainability score at
 repository, package, and file levels.
 
+## Current Capabilities vs. Market Leaders
+
+<!-- markdownlint-disable MD013 MD060 -->
+
+| Feature                              | chnq      | SonarQube          | CodeScene        | GolangCI-Lint      | Codacy       |
+|--------------------------------------|-----------|--------------------|------------------|--------------------|--------------|
+| **Structural Maintainability Score** | ✅ (0-10) | ✅ (A-F)            | ✅                | ❌                  | ✅            |
+| **Go-Specialized**                   | ✅         | ❌ (generic)        | ❌ (generic)     | ✅                  | ❌ (generic) |
+| **Deterministic**                    | ✅         | ❌ (rules-based)    | ❌ (rules-based) | ✅                  | ❌            |
+| **Zero Dependencies**                | ✅         | ❌ (needs Java, DB) | ❌ (SaaS)        | ❌ (needs plugins)  | ❌ (SaaS)    |
+| **Security Scanning**                | ❌         | ✅                  | ❌               | ✅                  | ✅            |
+| **Test Coverage**                    | ❌         | ✅                  | ✅               | ❌                  | ✅            |
+| **Git History Analysis**             | ❌         | ❌                  | ✅               | ❌                  | ❌            |
+| **CI/CD Integration**                | ✅         | ✅                  | ✅               | ✅                  | ✅            |
+| **Performance Metrics**              | ❌         | ❌                  | ✅               | ❌                  | ❌            |
+| **API/Dashboard**                    | ❌         | ✅                  | ✅               | ❌                  | ✅            |
+
+<!-- markdownlint-enable MD013 MD060 -->
+
+## How the Skill Works
+
+The skill guides an agent through a deterministic, read-only health analysis:
+
+```mermaid
+flowchart TD
+    A[Agent receives Go health request] --> B[Locate target repository]
+    B --> C[Read .go-code-health.json]
+    C --> D{Policy file exists?}
+    D -->|No| E[Run complete baseline scan]
+    E --> F[Ask for engine and thresholds]
+    F --> G[Create project policy]
+    D -->|Yes| H[Run configured complete scan]
+    G --> H
+    H --> I{Cache is valid?}
+    I -->|Yes| J[Reuse cached report]
+    I -->|No| K[Hash source files]
+    K --> L[Scan changed files with worker pool]
+    L --> M[Merge unchanged cached reports]
+    J --> N[Calculate scores and findings]
+    M --> N
+    N --> O[Evaluate policy thresholds]
+    O --> P[Return JSON or text report]
+    P --> Q[Explain hotspots and refactoring priorities]
+```
+
+### Analysis Flow
+
+1. The agent identifies the Go repository and reads its optional project policy.
+2. The analyzer uses the configured duplication engine and scans source files
+   without building or executing the target repository.
+3. A local cache reuses unchanged results; changed files are processed by a
+   bounded worker pool and merged deterministically.
+4. The analyzer calculates complexity, structure, duplication, and coupling
+   dimensions, then produces repository, package, and file scores.
+5. The policy gate checks the overall score, dimension thresholds, and health
+   thresholds before reporting pass or fail.
+6. The agent reports measured findings, hotspots, and deterministic improvement
+   suggestions.
+
 ### Quick start
 
 The analyzer requires Go 1.27.3. It has no third-party Go dependencies.
