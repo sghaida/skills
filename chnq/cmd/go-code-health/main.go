@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -231,7 +232,9 @@ type RunConfig struct {
 	workers         int
 	noCache         bool
 	cacheInfo       bool
+	cacheDebug      bool
 	cacheFile       string
+	cacheFileSet    bool
 	explainHotspots bool
 	hotspotsScope   string
 }
@@ -246,10 +249,17 @@ func parseFlags() RunConfig {
 	workers := flag.Int("workers", 10, "Number of parallel workers (1-256)")
 	noCache := flag.Bool("no-cache", false, "Ignore cache, force full scan")
 	cacheInfo := flag.Bool("cache-info", false, "Show cache status without scanning")
-	cacheFile := flag.String("cache-file", ".chnq-health-status", "Cache file location")
+	cacheDebug := flag.Bool("cache-debug", false, "Print cache decision diagnostics to stderr")
+	cacheFile := flag.String("cache-file", defaultCacheFileName, "Cache file location")
 	explainHotspots := flag.Bool("explain-hotspots", false, "Generate detailed explanations for hotspots")
 	hotspotsScope := flag.String("hotspots-scope", "file", "Hotspots scope: file or package")
 	flag.Parse()
+	cacheFileSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "cache-file" {
+			cacheFileSet = true
+		}
+	})
 
 	return RunConfig{
 		path:            *path,
@@ -260,39 +270,61 @@ func parseFlags() RunConfig {
 		workers:         *workers,
 		noCache:         *noCache,
 		cacheInfo:       *cacheInfo,
+		cacheDebug:      *cacheDebug,
 		cacheFile:       *cacheFile,
+		cacheFileSet:    cacheFileSet,
 		explainHotspots: *explainHotspots,
 		hotspotsScope:   *hotspotsScope,
 	}
 }
 
-// handlecacheinfo handles handle cache info
-func handleCacheInfo(cacheMgr *CacheManager) int {
+// cachePathFor resolves the default cache file against the analyzed project
+// root; an explicit or absolute --cache-file value is used as provided.
+func cachePathFor(cfg RunConfig, reportRoot string) string {
+	if cfg.cacheFileSet || filepath.IsAbs(cfg.cacheFile) {
+		return cfg.cacheFile
+	}
+	return filepath.Join(reportRoot, cfg.cacheFile)
+}
+
+// handleCacheInfo prints stored cache metadata and whether the cache would
+// serve the current scan exactly.
+func handleCacheInfo(cacheMgr *CacheManager, scan ScanContext) int {
 	cache, err := cacheMgr.ReadCache()
-	if err == nil && cache != nil {
-		fmt.Fprintf(os.Stderr, "Cache from: %s\nScan duration: %dms\n", cache.ScanTimestamp, cache.ScanDurationMs)
+	if err != nil || cache == nil {
+		fmt.Fprintf(os.Stderr, "No valid cache found\n")
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "No valid cache found\n")
+	fmt.Fprintf(os.Stderr, "Cache format: %s\nScoring version: %s\nAnalysis revision: %s\nCache from: %s\nScan duration: %dms\nFiles in manifest: %d\n",
+		cache.FormatVersion, cache.ScoringVersion, cache.AnalysisRevision,
+		cache.ScanTimestamp, cache.ScanDurationMs, len(cache.FileManifest))
+	printCacheValidity(cache, scan)
 	return 0
 }
 
-// checkcachedreport handles check cached report
-func checkCachedReport(cacheMgr *CacheManager, cfg RunConfig, currentHash string) (Report, bool) {
-	if cfg.noCache {
+// printCacheValidity compares the stored fingerprints to the current scan.
+func printCacheValidity(cache *CacheFile, scan ScanContext) {
+	manifest, err := buildSourceManifest(scan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Current manifest unavailable: %v\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Context match: %t\nManifest match: %t\n",
+		cache.ContextHash == scan.Fingerprint(),
+		cache.ManifestHash == manifestFingerprint(manifest))
+}
+
+// cachedReport returns the cached complete report only on an exact semantic
+// fingerprint and file manifest match.
+func cachedReport(cacheMgr *CacheManager, contextHash, manifestHash string, noCache bool) (Report, bool) {
+	if noCache {
 		return Report{}, false
 	}
-
-	cached, err := cacheMgr.ReadCache()
-	if err != nil || cached == nil || cached.Version != scoringVersion || cached.CodeHash != currentHash {
+	cache := cacheMgr.ValidCache(contextHash, manifestHash)
+	if cache == nil {
 		return Report{}, false
 	}
-
-	if cached.Report == nil {
-		return Report{}, false
-	}
-
-	return *cached.Report, true
+	return *cache.Report, true
 }
 
 // generateexplanations handles generate explanations
@@ -330,74 +362,44 @@ func emitCompletedReport(report Report, cfg RunConfig) int {
 	return checkFailUnder(report, cfg.failUnder)
 }
 
-// detectchangedfiles handles detect changed files
-func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[string]bool) {
-	if cfg.noCache {
-		return nil, nil
-	}
-
-	cached, ok := readUsableCache(cacheMgr)
-	if !ok {
-		return nil, nil
-	}
-
-	currentFiles, hashErr := cacheMgr.ComputeRepositoryFileHashes(cfg.path, cfg.includeTests)
-	if hashErr != nil {
-		return nil, nil
-	}
-
-	changedFiles := changedCacheFiles(cached, currentFiles)
-	if len(changedFiles) == 0 || len(changedFiles) >= len(currentFiles) {
-		return nil, nil
-	}
-
-	return cached, changedFiles
-}
-
-func readUsableCache(cacheMgr *CacheManager) (*CacheFile, bool) {
-	cached, err := cacheMgr.ReadCache()
-	if err != nil || cached == nil || cached.Version != scoringVersion ||
-		cached.Report == nil || len(cached.FilesHashMap) == 0 {
-		return nil, false
-	}
-	return cached, true
-}
-
-func changedCacheFiles(cached *CacheFile, currentFiles map[string]string) map[string]bool {
-	return IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
-}
-
-// performanalysis handles perform analysis
-func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
+// performAnalysis runs the analysis pipeline, reusing compatible cached file
+// snapshots, and refreshes the cache with the resulting report, snapshots,
+// manifest, and semantic fingerprint.
+func performAnalysis(cacheMgr *CacheManager, scan ScanContext, cfg RunConfig,
+	manifest map[string]string, manifestHash string) (Report, error) {
 	start := time.Now()
-
-	oldCache, changedFiles := detectChangedFiles(cacheMgr, cfg)
-
-	var report Report
-	var err error
-	if oldCache != nil {
-		report, err = analyzeWithOptionsFiltered(cfg.path, cfg.includeTests, cfg.includeGitChurn, cfg.workers, changedFiles)
-	} else {
-		report, err = analyzeWithOptions(cfg.path, cfg.includeTests, cfg.includeGitChurn, cfg.workers)
-	}
-
+	previous := previousCache(cacheMgr, cfg)
+	reportCacheDecision(cfg, decideCacheStatus(cacheMgr, previous, scan, manifest, cfg.noCache))
+	report, snapshots, err := analyzeScanWithCache(scan, cfg.workers, previous, manifest)
 	if err != nil {
 		return Report{}, err
 	}
-
-	if oldCache != nil {
-		report = *NewIncrementalUpdate(oldCache, &report, changedFiles).MergeReports()
-	}
-
-	duration := time.Since(start).Milliseconds()
-	codeHash, hashErr := cacheMgr.ComputeRepositoryHash(cfg.path)
-	if hashErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to hash repository for cache: %v\n", hashErr)
-	} else if cacheErr := cacheMgr.WriteCache(&report, codeHash, duration, cfg.path); cacheErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to write cache: %v\n", cacheErr)
-	}
-
+	writeAnalysisCache(cacheMgr, scan, manifest, manifestHash, snapshots, &report, time.Since(start).Milliseconds())
 	return report, nil
+}
+
+// previousCache loads the snapshot-compatible previous cache unless bypassed.
+func previousCache(cacheMgr *CacheManager, cfg RunConfig) *CacheFile {
+	if cfg.noCache {
+		return nil
+	}
+	return cacheMgr.ReusableCache()
+}
+
+// writeAnalysisCache persists the completed report; failures only warn.
+func writeAnalysisCache(cacheMgr *CacheManager, scan ScanContext, manifest map[string]string,
+	manifestHash string, snapshots map[string]FileSnapshot, report *Report, durationMs int64) {
+	cache := &CacheFile{
+		ContextHash:    scan.Fingerprint(),
+		ManifestHash:   manifestHash,
+		FileManifest:   manifest,
+		Snapshots:      snapshots,
+		Report:         report,
+		ScanDurationMs: durationMs,
+	}
+	if err := cacheMgr.WriteCache(cache); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to write cache: %v\n", err)
+	}
 }
 
 // run handles run
@@ -409,24 +411,42 @@ func run() int {
 		return 2
 	}
 
-	cacheMgr := NewCacheManager(cfg.cacheFile, scoringVersion)
-
-	if cfg.cacheInfo {
-		return handleCacheInfo(cacheMgr)
-	}
-
-	currentHash, err := cacheMgr.ComputeRepositoryHash(cfg.path)
+	scan, err := resolveScanContext(cfg.path, cfg.includeTests, cfg.includeGitChurn)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "hash error:", err)
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	cacheMgr := NewCacheManager(cachePathFor(cfg, scan.ReportRoot))
+	if cfg.includeGitChurn {
+		scan.GitRefsHash = gitRefsFingerprint(scan.Root)
+	}
 
-	report, found := checkCachedReport(cacheMgr, cfg, currentHash)
-	if found {
+	if cfg.cacheInfo {
+		return handleCacheInfo(cacheMgr, scan)
+	}
+
+	manifest, err := buildSourceManifest(scan)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "manifest error:", err)
+		return 2
+	}
+	manifestHash := manifestFingerprint(manifest)
+
+	if report, found := cachedReport(cacheMgr, scan.Fingerprint(), manifestHash, cfg.noCache); found {
+		discovery := Summary{}
+		if _, err := sourceFiles(scan.Root, scan.IncludeTests, &discovery); err != nil {
+			fmt.Fprintln(os.Stderr, "manifest error:", err)
+			return 2
+		}
+		report.Summary.ExcludedTestFiles = discovery.ExcludedTestFiles
+		reportCacheDecision(cfg, CacheDecision{
+			Status: cacheStatusHit, Reason: "exact-context-and-manifest-match",
+			FilesTotal: len(manifest), SnapshotsReused: len(manifest),
+		})
 		return emitCompletedReport(report, cfg)
 	}
 
-	report, err = performAnalysis(cacheMgr, cfg)
+	report, err := performAnalysis(cacheMgr, scan, cfg, manifest, manifestHash)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "analysis error:", err)
 		return 2

@@ -21,22 +21,12 @@ func analyzeWithOptions(path string, includeTests, includeGitChurn bool, workers
 	if len(workers) > 0 {
 		workerCount = workers[0]
 	}
-	return analyzeWithOptionsFiltered(path, includeTests, includeGitChurn, workerCount, nil)
-}
-
-// filtersourcefiles handles filter source files
-func filterSourceFiles(paths []string, root string, fileFilter map[string]bool) ([]string, error) {
-	if fileFilter == nil {
-		return paths, nil
+	scan, err := resolveScanContext(path, includeTests, includeGitChurn)
+	if err != nil {
+		return Report{}, err
 	}
-	filtered := paths[:0]
-	for _, candidate := range paths {
-		relative, relativeErr := filepath.Rel(root, candidate)
-		if relativeErr == nil && fileFilter[filepath.ToSlash(relative)] {
-			filtered = append(filtered, candidate)
-		}
-	}
-	return filtered, nil
+	report, _, err := analyzeScan(scan, workerCount)
+	return report, err
 }
 
 // validatesourcefiles handles validate source files
@@ -58,55 +48,130 @@ type analysisInputs struct {
 	report                  Report
 }
 
-// prepareanalysis handles prepare analysis
-func prepareAnalysis(path string, includeTests, includeGitChurn bool) (analysisInputs, error) {
-	root, err := filepath.Abs(path)
-	if err != nil {
-		return analysisInputs{}, err
-	}
+// analyzeScan runs the complete analysis pipeline for one resolved scan
+// context and returns the report plus file-local snapshots for caching.
+func analyzeScan(scan ScanContext, workers int) (Report, map[string]FileSnapshot, error) {
+	return analyzeScanWithCache(scan, workers, nil, nil)
+}
 
-	inputs := analysisInputs{root: root}
-	inputs.paths, err = sourceFiles(root, includeTests, &inputs.summary)
+// analyzeScanWithCache runs the single analysis pipeline, restoring unchanged
+// files from compatible cached snapshots instead of reparsing them. Every
+// project-derived metric is still recomputed over the complete file model, so
+// cold and incremental scans share one aggregation path.
+func analyzeScanWithCache(scan ScanContext, workers int, previous *CacheFile,
+	manifest map[string]string) (Report, map[string]FileSnapshot, error) {
+	inputs, err := prepareAnalysisContext(scan)
+	if err != nil {
+		return Report{}, nil, err
+	}
+	restored := restoreUnchangedFiles(&inputs, scan, previous, manifest)
+	parsed, err := parseSourceFiles(inputs.paths, inputs.root, &inputs.summary, &inputs.report, workers)
+	if err != nil {
+		return Report{}, nil, err
+	}
+	files := mergeModelFiles(parsed, restored)
+	if err := analyzeProjectModel(&inputs, files, scan.IncludeGitChurn); err != nil {
+		return Report{}, nil, err
+	}
+	return inputs.report, snapshotFiles(files), nil
+}
+
+// restoreUnchangedFiles removes snapshot-backed unchanged paths from the
+// parse list and returns their restored file models, accumulating the same
+// summary counters the parser would have produced for them.
+func restoreUnchangedFiles(inputs *analysisInputs, scan ScanContext,
+	previous *CacheFile, manifest map[string]string) []*sourceFile {
+	reusable := reusableSnapshots(previous, manifest)
+	if len(reusable) == 0 {
+		return nil
+	}
+	parsePaths := make([]string, 0, len(inputs.paths))
+	restored := make([]*sourceFile, 0, len(reusable))
+	for _, path := range inputs.paths {
+		snapshot, ok := reusable[reportRelativePath(scan.ReportRoot, path)]
+		if !ok {
+			parsePaths = append(parsePaths, path)
+			continue
+		}
+		restored = append(restored, restoreSummarizedFile(&inputs.summary, snapshot))
+	}
+	inputs.paths = parsePaths
+	return restored
+}
+
+// restoreSummarizedFile restores one snapshot and applies its parse counters.
+func restoreSummarizedFile(summary *Summary, snapshot FileSnapshot) *sourceFile {
+	file := restoreFile(snapshot)
+	summary.GoFiles++
+	summary.SourceLines += file.lines
+	summary.Functions += len(file.funcs)
+	return file
+}
+
+// reusableSnapshots selects cached snapshots whose file content is unchanged
+// in the current manifest.
+func reusableSnapshots(previous *CacheFile, manifest map[string]string) map[string]FileSnapshot {
+	if previous == nil {
+		return nil
+	}
+	reusable := make(map[string]FileSnapshot)
+	for path, hash := range manifest {
+		if previous.FileManifest[path] != hash {
+			continue
+		}
+		if snapshot, ok := previous.Snapshots[path]; ok {
+			reusable[path] = snapshot
+		}
+	}
+	return reusable
+}
+
+// reportRelativePath converts an absolute source path to the slash-separated
+// report-relative form used by manifests and snapshots.
+func reportRelativePath(reportRoot, path string) string {
+	relative, err := filepath.Rel(reportRoot, path)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(relative)
+}
+
+// mergeModelFiles combines parsed and restored files in the deterministic
+// path order the cold pipeline produces.
+func mergeModelFiles(parsed, restored []*sourceFile) []*sourceFile {
+	files := make([]*sourceFile, 0, len(parsed)+len(restored))
+	files = append(files, parsed...)
+	files = append(files, restored...)
+	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	return files
+}
+
+// prepareAnalysisContext discovers eligible files and builds analysis inputs
+// from one immutable scan context, so cache validation and analysis can never
+// resolve options independently.
+func prepareAnalysisContext(scan ScanContext) (analysisInputs, error) {
+	inputs := analysisInputs{root: scan.Root}
+	var err error
+	inputs.paths, err = sourceFiles(scan.Root, scan.IncludeTests, &inputs.summary)
 	if err != nil {
 		return analysisInputs{}, err
 	}
 	if err := validateSourceFiles(inputs.paths); err != nil {
-		return analysisInputs{}, fmt.Errorf("%w in %q", err, root)
+		return analysisInputs{}, fmt.Errorf("%w in %q", err, scan.Root)
 	}
-	projectConfig, configErr := loadProjectConfig(root)
-	if configErr != nil {
-		return analysisInputs{}, configErr
-	}
-	inputs.duplicationEngine = projectConfig.DuplicationEngine
-	if inputs.duplicationEngine == "" {
-		inputs.duplicationEngine = duplicationEngineInternal
-	}
-	if _, err := validateDuplicationEngine(inputs.duplicationEngine, filepath.Join(root, ".go-code-health.json")); err != nil {
-		return analysisInputs{}, err
-	}
-	inputs.broadInterfaceThreshold = projectConfig.BroadInterfaceThreshold
-	inputs.module, _ = locateModule(root)
-	inputs.report = newReport(root, includeTests, includeGitChurn, inputs.duplicationEngine, inputs.broadInterfaceThreshold)
+	inputs.duplicationEngine = scan.DuplicationEngine
+	inputs.broadInterfaceThreshold = scan.BroadInterfaceThreshold
+	inputs.module = scan.ModulePath
+	inputs.report = newReport(scan.Root, scan.IncludeTests, scan.IncludeGitChurn,
+		scan.DuplicationEngine, scan.BroadInterfaceThreshold)
 	return inputs, nil
 }
 
-// filteranalysispaths handles filter analysis paths
-func filterAnalysisPaths(inputs analysisInputs, fileFilter map[string]bool) (analysisInputs, error) {
-	filtered, err := filterSourceFiles(inputs.paths, inputs.root, fileFilter)
-	if err != nil {
-		return analysisInputs{}, err
-	}
-	inputs.paths = filtered
-	return inputs, nil
-}
-
-// analyzeparsedfiles handles analyze parsed files
-func analyzeParsedFiles(inputs *analysisInputs, includeGitChurn bool, workers int) error {
-	parsedFiles, err := parseSourceFiles(inputs.paths, inputs.root, &inputs.summary, &inputs.report, workers)
-	if err != nil {
-		return err
-	}
-	if len(parsedFiles) == 0 {
+// analyzeProjectModel recomputes every project-derived metric from the
+// complete file model and finalizes the report through the single
+// aggregation path shared by cold and incremental scans.
+func analyzeProjectModel(inputs *analysisInputs, files []*sourceFile, includeGitChurn bool) error {
+	if len(files) == 0 {
 		return fmt.Errorf("no parsable non-generated Go files in %q; warnings: %s",
 			inputs.root, strings.Join(inputs.report.Warnings, "; "))
 	}
@@ -114,25 +179,25 @@ func analyzeParsedFiles(inputs *analysisInputs, includeGitChurn bool, workers in
 		inputs.report.Warnings = append(inputs.report.Warnings,
 			"go.mod not found: coupling score is unavailable, and remaining weights are renormalized")
 	}
-	assignPackageDependencies(parsedFiles, inputs.module)
-	collectPackageHealth(parsedFiles, inputs.module, &inputs.summary)
+	assignPackageDependencies(files, inputs.module)
+	collectPackageHealth(files, inputs.module, &inputs.summary)
 	inputs.summary.Health.DocumentationPercent = percent(
 		inputs.summary.Health.DocumentedExportedSymbols,
 		inputs.summary.Health.ExportedSymbols,
 	)
 	if includeGitChurn {
-		if err := applyGitChurn(inputs.root, parsedFiles, &inputs.summary); err != nil {
+		if err := applyGitChurn(inputs.root, files, &inputs.summary); err != nil {
 			return err
 		}
 	}
-	analyzeArchitecture(parsedFiles, inputs.broadInterfaceThreshold)
-	collectArchitectureHealth(parsedFiles, &inputs.summary, inputs.broadInterfaceThreshold)
-	if err := completeDuplicationAnalysis(inputs, parsedFiles); err != nil {
+	analyzeArchitecture(files, inputs.broadInterfaceThreshold)
+	collectArchitectureHealth(files, &inputs.summary, inputs.broadInterfaceThreshold)
+	if err := completeDuplicationAnalysis(inputs, files); err != nil {
 		return err
 	}
-	finalizeDuplicationSummary(parsedFiles, inputs.duplicationEngine, &inputs.summary)
+	finalizeDuplicationSummary(files, inputs.duplicationEngine, &inputs.summary)
 	inputs.report.Summary = inputs.summary
-	return postProcessReport(&inputs.report, parsedFiles, includeGitChurn, inputs.module != "")
+	return postProcessReport(&inputs.report, files, includeGitChurn, inputs.module != "")
 }
 
 func completeDuplicationAnalysis(inputs *analysisInputs, parsedFiles []*sourceFile) error {
@@ -148,22 +213,6 @@ func postProcessReport(report *Report, parsedFiles []*sourceFile, includeGitChur
 		report.GitHotspots = topGitHotspots(report.Files)
 	}
 	return nil
-}
-
-// analyzewithoptionsfiltered handles analyze with options filtered
-func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool, workers int, fileFilter map[string]bool) (Report, error) {
-	inputs, err := prepareAnalysis(path, includeTests, includeGitChurn)
-	if err != nil {
-		return Report{}, err
-	}
-	inputs, err = filterAnalysisPaths(inputs, fileFilter)
-	if err != nil {
-		return Report{}, err
-	}
-	if err := analyzeParsedFiles(&inputs, includeGitChurn, workers); err != nil {
-		return Report{}, err
-	}
-	return inputs.report, nil
 }
 
 // collectpackagehealth handles collect package health

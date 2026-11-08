@@ -4,228 +4,212 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 	"time"
 )
 
-// cachefile represents the cached analysis result
+// cacheFormatVersion identifies the serialized cache layout. Caches written
+// with any other format are rejected and rebuilt.
+const cacheFormatVersion = "2"
+
+// CacheFile is the serialized analysis cache.
 type CacheFile struct {
-	Version              string                 `json:"version"`
-	ScanTimestamp        string                 `json:"scan_timestamp"`
-	CodeHash             string                 `json:"code_hash"`
-	FilesHashMap         map[string]string      `json:"files_hash_map"`
-	Report               *Report                `json:"report"`
-	HotspotsExplanations map[string]interface{} `json:"hotspots_explanations,omitempty"`
-	ScanDurationMs       int64                  `json:"scan_duration_ms"`
+	FormatVersion    string                  `json:"format_version"`
+	ScoringVersion   string                  `json:"scoring_version"`
+	AnalysisRevision string                  `json:"analysis_revision"`
+	ScanTimestamp    string                  `json:"scan_timestamp"`
+	ContextHash      string                  `json:"context_hash"`
+	ManifestHash     string                  `json:"manifest_hash"`
+	FileManifest     map[string]string       `json:"file_manifest"`
+	Snapshots        map[string]FileSnapshot `json:"snapshots,omitempty"`
+	Report           *Report                 `json:"report"`
+	ScanDurationMs   int64                   `json:"scan_duration_ms"`
 }
 
-// cachemanager handles cache read/write operations
+// CacheManager handles cache read and write operations.
 type CacheManager struct {
 	cacheFile string
-	version   string
 }
 
-// newcachemanager creates a new cache manager
-func NewCacheManager(cacheFile, version string) *CacheManager {
+// NewCacheManager creates a cache manager for the given cache file path.
+func NewCacheManager(cacheFile string) *CacheManager {
 	if cacheFile == "" {
-		cacheFile = ".chnq-health-status"
+		cacheFile = defaultCacheFileName
 	}
-	return &CacheManager{
-		cacheFile: cacheFile,
-		version:   version,
-	}
+	return &CacheManager{cacheFile: cacheFile}
 }
 
-// computerepositoryhash computes sha256 hash of all .go files in a directory
-func (cm *CacheManager) ComputeRepositoryHash(rootPath string) (string, error) {
-	h := sha256.New()
-
-	// Walk directory and hash all .go files
-	err := filepath.Walk(rootPath, hashWalkEntry(h))
-
-	if err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// hashwalkentry reports whether hash walk entry
-func hashWalkEntry(hash io.Writer) filepath.WalkFunc {
-	return func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || filepath.Ext(path) != ".go" || isBuildArtifact(path) {
-			return nil
-		}
-		file, openErr := os.Open(path)
-		if openErr != nil {
-			return nil
-		}
-		defer func() { _ = file.Close() }()
-		_, _ = io.Copy(hash, file)
-		return nil
-	}
-}
-
-// isbuildartifact returns true if path should be excluded from hashing
-func isBuildArtifact(path string) bool {
-	excludeDirs := []string{".build", "node_modules", ".git"}
-	for _, dir := range excludeDirs {
-		if strings.Contains(path, filepath.Join(string(filepath.Separator), dir, string(filepath.Separator))) ||
-			strings.HasPrefix(filepath.Base(path), ".") {
-			return true
-		}
-	}
-	return false
-}
-
-// computefilehash computes sha256 hash of a single file
-func (cm *CacheManager) ComputeFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = file.Close() }()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// readcache reads the cache file from disk
+// ReadCache reads and decodes the cache file.
 func (cm *CacheManager) ReadCache() (*CacheFile, error) {
 	data, err := os.ReadFile(cm.cacheFile)
 	if err != nil {
 		return nil, err
 	}
-
 	var cache CacheFile
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return nil, err
 	}
-
 	return &cache, nil
 }
 
-// writecache writes the cache file to disk atomically
-func (cm *CacheManager) WriteCache(report *Report, codeHash string, scanDurationMs int64, roots ...string) error {
-	cache := &CacheFile{
-		Version:        cm.version,
-		ScanTimestamp:  time.Now().UTC().Format(time.RFC3339),
-		CodeHash:       codeHash,
-		FilesHashMap:   make(map[string]string),
-		Report:         report,
-		ScanDurationMs: scanDurationMs,
+// ValidCache returns the cached entry only when its format, scoring version,
+// scan context, and complete file manifest all match the current scan.
+func (cm *CacheManager) ValidCache(contextHash, manifestHash string) *CacheFile {
+	cache, err := cm.ReadCache()
+	if err != nil || cache.FormatVersion != cacheFormatVersion || cache.ScoringVersion != scoringVersion {
+		return nil
 	}
+	if cache.ContextHash != contextHash || cache.ManifestHash != manifestHash || cache.Report == nil {
+		return nil
+	}
+	return cache
+}
 
-	cm.populateFileHashes(cache, report.Files, roots)
+// ReusableCache returns the cache when its format, scoring version, and
+// analysis revision make its file snapshots reusable. Snapshots hold only
+// file-local data, so they stay valid across scan-option changes as long as
+// each file's content hash still matches.
+func (cm *CacheManager) ReusableCache() *CacheFile {
+	cache, err := cm.ReadCache()
+	if err != nil || cache.FormatVersion != cacheFormatVersion ||
+		cache.ScoringVersion != scoringVersion || cache.AnalysisRevision != analysisRevision {
+		return nil
+	}
+	return cache
+}
 
-	// Marshal to JSON
+// WriteCache atomically writes the cache file with restrictive permissions.
+func (cm *CacheManager) WriteCache(cache *CacheFile) error {
+	cache.FormatVersion = cacheFormatVersion
+	cache.ScoringVersion = scoringVersion
+	cache.AnalysisRevision = analysisRevision
+	cache.ScanTimestamp = time.Now().UTC().Format(time.RFC3339)
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		return err
 	}
+	return atomicWriteFile(cm.cacheFile, data)
+}
 
-	// Atomic write: write to temp file, then rename
-	tmpFile := cm.cacheFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
+// atomicWriteFile writes data to a unique temporary file in the destination
+// directory and renames it into place, so concurrent writers never corrupt
+// or interleave the destination file.
+func atomicWriteFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-
-	if err := os.Rename(tmpFile, cm.cacheFile); err != nil {
-		_ = os.Remove(tmpFile)
+	if err := writeAndClose(tmp, data); err != nil {
+		_ = os.Remove(tmp.Name())
 		return err
 	}
-
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
 	return nil
 }
 
-// populatefilehashes handles populate file hashes
-func (cm *CacheManager) populateFileHashes(cache *CacheFile, files []FileReport, roots []string) {
-	for _, file := range files {
-		filePath := cacheFilePath(file.Path, roots)
-		hash, err := cm.ComputeFileHash(filePath)
-		if err == nil {
-			cache.FilesHashMap[file.Path] = hash
-		}
+// writeAndClose writes data and reports the first write or close failure.
+func writeAndClose(file *os.File, data []byte) error {
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
 	}
+	return closeErr
 }
 
-func cacheFilePath(path string, roots []string) string {
-	if len(roots) > 0 && roots[0] != "" {
-		return filepath.Join(roots[0], filepath.FromSlash(path))
-	}
-	return path
-}
-
-// validatecache checks if cache is valid
-func (cm *CacheManager) ValidateCache(currentCodeHash string) (bool, error) {
-	cache, err := cm.ReadCache()
+// fileSHA256 computes the SHA-256 content hash of one file.
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-
-	// Check version
-	if cache.Version != cm.version {
-		return false, nil
+	defer func() { _ = file.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return "", err
 	}
-
-	// Check code hash
-	if cache.CodeHash != currentCodeHash {
-		return false, nil
-	}
-
-	return true, nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// computefileshashmap computes hashes for all files at root path
-func (cm *CacheManager) ComputeFilesHashMap(_ string, files []string) map[string]string {
-	hashes := make(map[string]string)
-	for _, file := range files {
-		hash, err := cm.ComputeFileHash(file)
-		if err == nil {
-			hashes[file] = hash
-		}
-	}
-	return hashes
-}
-
-// ComputeRepositoryFileHashes returns per-file hashes using the same relative
-// paths that reports use, allowing changed files to be rescanned selectively
-func (cm *CacheManager) ComputeRepositoryFileHashes(rootPath string, includeTests bool) (map[string]string, error) {
-	root, err := filepath.Abs(rootPath)
+// buildSourceManifest enumerates eligible Go files with the same discovery
+// rules as the analyzer and hashes their contents. Any unreadable eligible
+// file fails the manifest, so a stale cache hit can never hide it.
+func buildSourceManifest(scan ScanContext) (map[string]string, error) {
+	paths, err := sourceFiles(scan.Root, scan.IncludeTests, &Summary{})
 	if err != nil {
 		return nil, err
 	}
-	paths, err := sourceFiles(root, includeTests, &Summary{})
-	if err != nil {
-		return nil, err
-	}
-	reportRoot := moduleSearchRoot(root)
-	hashes := make(map[string]string, len(paths))
+	manifest := make(map[string]string, len(paths))
 	for _, path := range paths {
-		if err := cm.addRepositoryFileHash(hashes, reportRoot, path); err != nil {
+		if err := addManifestEntry(manifest, scan.ReportRoot, path); err != nil {
 			return nil, err
 		}
 	}
-	return hashes, nil
+	return manifest, nil
 }
 
-// addrepositoryfilehash handles add repository file hash
-func (cm *CacheManager) addRepositoryFileHash(hashes map[string]string, reportRoot, path string) error {
-	hash, err := cm.ComputeFileHash(path)
+// addManifestEntry hashes one eligible file under its report-relative path.
+func addManifestEntry(manifest map[string]string, reportRoot, path string) error {
+	hash, err := fileSHA256(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("hash source file: %w", err)
 	}
 	relative, err := filepath.Rel(reportRoot, path)
 	if err != nil {
 		return err
 	}
-	hashes[filepath.ToSlash(relative)] = hash
+	manifest[filepath.ToSlash(relative)] = hash
 	return nil
+}
+
+// manifestFingerprint hashes the sorted manifest entries, including relative
+// paths, so renames and moves invalidate cached reports.
+func manifestFingerprint(manifest map[string]string) string {
+	paths := make([]string, 0, len(manifest))
+	for path := range manifest {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, path := range paths {
+		h.Write([]byte(path))
+		h.Write([]byte{0})
+		h.Write([]byte(manifest[path]))
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// IdentifyChangedFiles reports paths that were added, modified, or deleted
+// between two file manifests.
+func IdentifyChangedFiles(oldHashes, newHashes map[string]string) map[string]bool {
+	changed := make(map[string]bool)
+	addNewOrChangedFiles(changed, oldHashes, newHashes)
+	addDeletedFiles(changed, oldHashes, newHashes)
+	return changed
+}
+
+// addNewOrChangedFiles marks paths that are new or have different hashes.
+func addNewOrChangedFiles(changed map[string]bool, oldHashes, newHashes map[string]string) {
+	for path, newHash := range newHashes {
+		if oldHash, exists := oldHashes[path]; !exists || oldHash != newHash {
+			changed[path] = true
+		}
+	}
+}
+
+// addDeletedFiles marks paths that no longer exist in the new manifest.
+func addDeletedFiles(changed map[string]bool, oldHashes, newHashes map[string]string) {
+	for path := range oldHashes {
+		if _, exists := newHashes[path]; !exists {
+			changed[path] = true
+		}
+	}
 }

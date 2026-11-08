@@ -52,14 +52,14 @@ flowchart TD
     F --> G[Create project policy]
     D -->|Yes| H[Run configured complete scan]
     G --> H
-    H --> I{Cache is valid?}
-    I -->|Yes| J[Reuse cached report]
-    I -->|No| K[Hash source files]
-    K --> L[Scan changed files with worker pool]
-    L --> M[Merge unchanged cached reports]
-    J --> N[Calculate scores and findings]
-    M --> N
-    N --> O[Evaluate policy thresholds]
+    H --> I[Resolve scan fingerprint and hash eligible source manifest]
+    I --> K{Exact fingerprint and manifest match?}
+    K -->|Yes| J[Reuse cached complete report]
+    K -->|No| L[Parse changed files with worker pool]
+    L --> M[Restore unchanged files from cached snapshots]
+    M --> N[Recompute all project-wide metrics and scores]
+    J --> O[Evaluate policy thresholds]
+    N --> O
     O --> P[Return JSON or text report]
     P --> Q[Explain hotspots and refactoring priorities]
 ```
@@ -69,8 +69,11 @@ flowchart TD
 1. The agent identifies the Go repository and reads its optional project policy.
 2. The analyzer uses the configured duplication engine and scans source files
    without building or executing the target repository.
-3. A local cache reuses unchanged results; changed files are processed by a
-   bounded worker pool and merged deterministically.
+3. A local cache reuses a complete report only on an exact semantic
+   fingerprint and file-manifest match; otherwise changed files are parsed by
+   a bounded worker pool, unchanged files are restored from cached file-local
+   snapshots, and every project-wide metric is recomputed over the complete
+   model, keeping cached and uncached results semantically identical.
 4. The analyzer calculates the four weighted health dimensions plus
    independent cycle, interface-compliance, and duck-typing scores, then
    produces repository, package, and file reports.
@@ -139,15 +142,21 @@ below the requested threshold:
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --fail-under 7
 ```
 
-Scans use a local `.chnq-health-status` cache (ignored by Git). Unchanged
-repositories reuse the cached report; when the cache detects a partial change,
-only changed files are rescanned and merged with unchanged results. File
+Scans use a local `.chnq-health-status` cache (ignored by Git), stored in the
+analyzed project root by default. A cached report is reused only on an exact
+semantic fingerprint and file-manifest match; after any change, unchanged
+files are restored from cached snapshots while all project-wide metrics are
+recomputed, so cached and uncached scans report identical results. File
 parsing uses 10 workers by default and can be tuned with `--workers 1-256`.
-Use `--no-cache` for a complete rescan:
+Use `--no-cache` for a complete rescan, `--cache-debug` to see the cache
+decision (HIT, INCREMENTAL, MISS, INVALIDATED, REBUILT, or BYPASSED), and
+`--cache-info` to inspect stored cache metadata and validity without scanning:
 
 ```sh
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --workers 20
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --no-cache
+./chnq/scripts/analyze.sh /path/to/your/go/repo --cache-debug
+./chnq/scripts/analyze.sh /path/to/your/go/repo --cache-info
 ```
 
 Generate deterministic hotspot explanations without an LLM. The default scope
@@ -179,35 +188,37 @@ fixture:
 
 | Benchmark | Median latency | Allocations |
 | --- | ---: | ---: |
-| Cold scan | 1.82 ms/op | 5,793 allocs/op |
-| Cached scan validation and reuse | 0.60 ms/op | 993 allocs/op |
-| Incremental scan with one changed file | 1.88 ms/op | 2,383 allocs/op |
+| Cold scan | 1.47 ms/op | 5,531 allocs/op |
+| Cached scan validation and reuse | 0.62 ms/op | 1,280 allocs/op |
+| Incremental scan with one changed file | 1.10 ms/op | 2,447 allocs/op |
 
 These are analyzer-core measurements and exclude shell startup, process
 startup, and terminal rendering. They are reference results rather than
 universal guarantees; hardware, Go toolchain, repository size, worker count,
 duplication engine, and filesystem state affect latency. The cached benchmark
-includes repository hash calculation and cache validation. The incremental
-benchmark includes changed-file detection, rescanning, report merging, and
+includes manifest hashing and fingerprint validation. The incremental
+benchmark includes changed-file detection, parsing the changed file, restoring
+unchanged files from snapshots, recomputing all project-wide metrics, and
 cache writing.
 
 #### Current `chnq` module perspective
 
-For perspective, the current `chnq` module contains 13 Go files, 3,637 source
-lines, and 267 functions. An end-to-end run of the installed skill on this
+For perspective, the current `chnq` module contains 15 Go files, 3,867 source
+lines, and 278 functions. An end-to-end run of the installed skill on this
 module produced these approximate latencies:
 
 | Scan type | Approximate latency |
 | --- | ---: |
-| Full scan with `--no-cache` | 60 ms |
-| Cached scan | 50 ms |
-| Incremental scan with one changed file | 50 ms |
+| Full scan with `--no-cache` | 360 ms |
+| Cached scan (exact fingerprint hit) | 20 ms |
+| Incremental scan with one changed file | 70 ms |
 
-These measurements include process startup, repository hashing, JSON output,
-and cache handling. The small project size means startup overhead dominates,
-so cached and incremental scans are close to the full-scan time. Larger
-repositories should see a more noticeable benefit from avoiding unchanged
-file parsing.
+These measurements include process startup, manifest hashing, JSON output,
+and cache handling with the `jscpd-rs` duplication engine. The full and
+incremental scans invoke the external engine over all eligible files, which
+dominates their latency; an exact cache hit skips analysis entirely. Larger
+repositories see a bigger benefit from avoiding unchanged-file parsing while
+every project-wide metric is still recomputed for correctness.
 
 ### Project policy and required health gate
 
