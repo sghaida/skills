@@ -13,13 +13,29 @@ import (
 	"strings"
 )
 
-const scoringVersion = "go-v0.1.0"
+const scoringVersion = "go-v0.2.0"
 
 type Dimensions struct {
 	Complexity  *float64 `json:"complexity"`
 	Structure   *float64 `json:"structure"`
 	Duplication *float64 `json:"duplication"`
 	Coupling    *float64 `json:"coupling"`
+}
+
+type HealthMetrics struct {
+	ExportedSymbols           int     `json:"exported_symbols"`
+	DocumentedExportedSymbols int     `json:"documented_exported_symbols"`
+	DocumentationPercent      float64 `json:"documentation_percent"`
+	IgnoredReturnValues       int     `json:"ignored_return_values"`
+	Panics                    int     `json:"panics"`
+	TODOs                     int     `json:"todos"`
+	FIXMEs                    int     `json:"fixmes"`
+	Goroutines                int     `json:"goroutines"`
+	ChannelOperations         int     `json:"channel_operations"`
+	ImportCycles              int     `json:"import_cycles"`
+	DependencyDepth           int     `json:"dependency_depth"`
+	IncomingDependencies      int     `json:"incoming_dependencies"`
+	GitChurn                  int     `json:"git_churn,omitempty"`
 }
 
 type Finding struct {
@@ -49,6 +65,7 @@ type FileReport struct {
 	TotalFunctionTokens int              `json:"total_function_tokens"`
 	DuplicationPercent  float64          `json:"duplication_percent"`
 	Dimensions          Dimensions       `json:"dimensions"`
+	Health              HealthMetrics    `json:"health"`
 	Findings            []Finding        `json:"findings"`
 }
 
@@ -58,21 +75,25 @@ type PackageReport struct {
 	Files                int     `json:"files"`
 	Lines                int     `json:"lines"`
 	InternalDependencies int     `json:"internal_dependencies"`
+	IncomingDependencies int     `json:"incoming_dependencies"`
+	DependencyDepth      int     `json:"dependency_depth"`
 }
 
 type Summary struct {
-	GoFiles                int     `json:"go_files"`
-	SourceLines            int     `json:"source_lines"`
-	Functions              int     `json:"functions"`
-	DuplicateTokens        int     `json:"duplicate_tokens"`
-	FunctionTokens         int     `json:"function_tokens"`
-	DuplicationPercent     float64 `json:"duplication_percent"`
-	ExcludedTestFiles      int     `json:"excluded_test_files"`
-	ExcludedGeneratedFiles int     `json:"excluded_generated_files"`
+	GoFiles                int           `json:"go_files"`
+	SourceLines            int           `json:"source_lines"`
+	Functions              int           `json:"functions"`
+	DuplicateTokens        int           `json:"duplicate_tokens"`
+	FunctionTokens         int           `json:"function_tokens"`
+	DuplicationPercent     float64       `json:"duplication_percent"`
+	ExcludedTestFiles      int           `json:"excluded_test_files"`
+	ExcludedGeneratedFiles int           `json:"excluded_generated_files"`
+	Health                 HealthMetrics `json:"health"`
 }
 
 type Configuration struct {
 	IncludeTests          bool   `json:"include_tests"`
+	IncludeGitChurn       bool   `json:"include_git_churn"`
 	DuplicateWindowTokens int    `json:"duplicate_window_tokens"`
 	DuplicationEngine     string `json:"duplication_engine"`
 }
@@ -92,6 +113,7 @@ type Report struct {
 	Packages        []PackageReport `json:"packages"`
 	Files           []FileReport    `json:"files"`
 	Hotspots        []FileReport    `json:"hotspots"`
+	GitHotspots     []FileReport    `json:"git_hotspots,omitempty"`
 	Warnings        []string        `json:"warnings"`
 }
 
@@ -164,6 +186,7 @@ func run() int {
 	path := flag.String("path", ".", "Go repository or directory to scan (read-only)")
 	output := flag.String("format", "json", "Output format: json or text")
 	includeTests := flag.Bool("include-tests", false, "Include *_test.go files")
+	includeGitChurn := flag.Bool("include-git-churn", false, "Include changed-line counts from Git history")
 	failUnder := flag.Float64("fail-under", -1, "Exit 3 if the score falls below the supplied 0-10 threshold")
 	flag.Parse()
 
@@ -171,7 +194,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	report, err := analyze(*path, *includeTests)
+	report, err := analyzeWithOptions(*path, *includeTests, *includeGitChurn)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "analysis error:", err)
 		return 2

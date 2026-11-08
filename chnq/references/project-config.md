@@ -16,6 +16,17 @@ Projects can store their code-health policy in a checked-in
     "duplication": 8.0,
     "coupling": 6.0
   },
+  "health_thresholds": {
+    "minimum_documentation_percent": 80.0,
+    "maximum_ignored_return_values": 0,
+    "maximum_panics": 0,
+    "maximum_todos": 20,
+    "maximum_fixmes": 0,
+    "maximum_import_cycles": 0,
+    "maximum_dependency_depth": 8,
+    "maximum_incoming_dependencies": 20,
+    "maximum_git_churn": 2000
+  },
   "include_tests": false
 }
 ```
@@ -30,6 +41,11 @@ Projects can store their code-health policy in a checked-in
 - `minimum_dimensions` is optional. Each configured dimension must be between
   `0.0` and `10.0`. A configured dimension is an additional gate; it cannot be
   offset by a higher score in another dimension.
+- `health_thresholds` is optional. These thresholds apply to repository-level
+  values in the report's `summary.health` object. `minimum_` thresholds pass
+  when the measured value is greater than or equal to the threshold;
+  `maximum_` thresholds pass when the measured value is less than or equal to
+  the threshold.
 - `include_tests` defaults to `false` when omitted.
 
 The policy applies to the complete scan of the configured project scope.
@@ -38,8 +54,10 @@ dimension is compared with its corresponding value in `dimensions`.
 
 ## Threshold descriptions
 
-All thresholds use the analyzer's 0.0–10.0 scale: higher is healthier. The
-threshold is inclusive, so a measured value equal to the threshold passes.
+`minimum_score` and `minimum_dimensions` use the analyzer's 0.0–10.0 scale:
+higher is healthier. Their thresholds are inclusive, so a measured value equal
+to the threshold passes. `health_thresholds` use the metric-specific units and
+directions described below.
 
 ### Overall score
 
@@ -102,6 +120,62 @@ for projects where coupling is not applicable.
   Set it to `true` when test code is part of the project's maintainability
   target.
 
+## Additional health metrics
+
+These metrics are reported in `summary.health` and can be configured under
+`health_thresholds`. The threshold names intentionally describe the direction
+of a passing result.
+
+### Documentation coverage
+
+- **`minimum_documentation_percent`** measures the percentage of exported
+  functions, types, constants, and variables with GoDoc comments.
+- A value of `80.0` requires at least 80% of exported symbols to be
+  documented.
+- A project with no exported symbols reports `0.0`; omit this threshold for
+  internal packages that intentionally expose no public API.
+
+### Error-handling findings
+
+- **`maximum_ignored_return_values`** limits assignments that discard a call's
+  return value with `_`.
+- **`maximum_panics`** limits detected `panic` calls.
+- These are syntax-based findings, not proof that every discarded value or
+  panic is incorrect. Configure them when the project has a strict error
+  handling policy.
+
+### Work-item markers
+
+- **`maximum_todos`** limits `TODO` comments.
+- **`maximum_fixmes`** limits `FIXME` comments.
+- These thresholds are useful for preventing unresolved work from accumulating.
+
+### Package dependency health
+
+- **`maximum_import_cycles`** limits packages participating in internal import
+  cycles. `0` is recommended.
+- **`maximum_dependency_depth`** limits the longest internal dependency chain
+  observed for a package.
+- **`maximum_incoming_dependencies`** limits package fan-in. High fan-in can
+  indicate a central package whose changes affect much of the repository, but
+  it is not automatically a defect.
+
+### Git churn
+
+- **`maximum_git_churn`** limits changed lines reported by the optional
+  `--include-git-churn` scan.
+- This threshold is only meaningful when Git history is available and the
+  option is enabled. Otherwise, omit it or treat the result as unavailable.
+- Git churn is a risk indicator, not a quality score; a frequently changed
+  file may be an important, healthy component.
+
+### Descriptive-only metrics
+
+`exported_symbols`, `goroutines`, and `channel_operations` are reported for
+context but do not have generic pass/fail thresholds. Their desired values
+depend on the package's role. Review them alongside hotspots and findings
+instead of treating larger or smaller values as inherently healthier.
+
 Use `minimum_score` for the required overall health level. Add dimension
 thresholds when a project needs to enforce specific engineering priorities,
 such as preventing complexity from being hidden by strong duplication or
@@ -112,6 +186,8 @@ An analysis is **passing** only when:
 1. `analysis_status` is `complete`.
 2. `code_health_score` is present and meets `minimum_score`.
 3. Every configured dimension is present and meets its threshold.
+4. Every configured `health_thresholds` value is present and meets its
+   minimum or maximum comparison.
 
 When a policy exists, the skill must run this check before every agentic task
 or code change. If the check fails, code-health remediation takes priority:

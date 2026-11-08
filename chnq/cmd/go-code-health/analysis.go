@@ -2,14 +2,13 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/scanner"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -34,6 +33,18 @@ type sourceFile struct {
 	funcs                      []*functionData
 	internalImports            int
 	packageFanOut              int
+	packageFanIn               int
+	packageDependencyDepth     int
+	packageImportCycles        int
+	exportedSymbols            int
+	documentedExportedSymbols  int
+	ignoredReturnValues        int
+	panics                     int
+	todos                      int
+	fixmes                     int
+	goroutines                 int
+	channelOperations          int
+	gitChurn                   int
 	duplicateTokens            int
 	externalDuplicationPercent *float64
 	externalDuplicateTokens    int
@@ -54,7 +65,7 @@ func lineCount(src []byte) int {
 
 func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, path, src, 0)
+	parsed, err := parser.ParseFile(fset, path, src, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +82,7 @@ func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 			f.imports = append(f.imports, importPath)
 		}
 	}
+	collectHealthMetrics(parsed, f)
 
 	appendFunction := func(name string, body *ast.BlockStmt, from, to token.Pos) {
 		if body == nil {
@@ -302,62 +314,11 @@ func parseModuleLine(line string) (string, bool) {
 	return name, name != ""
 }
 
-func withinModule(imp, module string) bool { return module != "" && strings.HasPrefix(imp, module+"/") }
-
-func sourceFiles(root string, includeTests bool, sum *Summary) ([]string, error) {
-	info, err := os.Stat(root)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		if !strings.HasSuffix(root, ".go") {
-			return nil, errors.New("--path must be a directory or .go file")
-		}
-		return []string{root}, nil
-	}
-	paths := make([]string, 0)
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return directoryWalkAction(path, root, entry.Name())
-		}
-		if !isGoSource(entry) {
-			return nil
-		}
-		if isExcludedTest(entry.Name(), includeTests) {
-			if strings.HasSuffix(entry.Name(), "_test.go") {
-				sum.ExcludedTestFiles++
-			}
-			return nil
-		}
-		paths = append(paths, path)
-		return nil
-	})
-	sort.Strings(paths)
-	return paths, err
-}
-
-func directoryWalkAction(path, root, name string) error {
-	if path == root {
-		return nil
-	}
-	if name == "vendor" || name == "testdata" || name == "third_party" || name == "node_modules" || strings.HasPrefix(name, ".") {
-		return filepath.SkipDir
-	}
-	return nil
-}
-
-func isGoSource(entry fs.DirEntry) bool {
-	return entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".go")
-}
-
-func isExcludedTest(name string, includeTests bool) bool {
-	return strings.HasSuffix(name, "_test.go") && !includeTests
-}
-
 func analyze(path string, includeTests bool) (Report, error) {
+	return analyzeWithOptions(path, includeTests, false)
+}
+
+func analyzeWithOptions(path string, includeTests, includeGitChurn bool) (Report, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
 		return Report{}, err
@@ -375,7 +336,7 @@ func analyze(path string, includeTests bool) (Report, error) {
 		return Report{}, err
 	}
 	module, _ := locateModule(root)
-	report := newReport(root, includeTests, duplicationEngine)
+	report := newReport(root, includeTests, includeGitChurn, duplicationEngine)
 	parsedFiles, err := parseSourceFiles(paths, root, &summary, &report)
 	if err != nil {
 		return Report{}, err
@@ -387,91 +348,113 @@ func analyze(path string, includeTests bool) (Report, error) {
 		report.Warnings = append(report.Warnings, "go.mod not found: coupling score is unavailable, and remaining weights are renormalized")
 	}
 	assignPackageDependencies(parsedFiles, module)
-	if duplicationEngine == duplicationEngineJSCPDRS {
-		if err := detectWithJSCPDRS(root, parsedFiles, &summary); err != nil {
+	collectPackageHealth(parsedFiles, module, &summary)
+	summary.Health.DocumentationPercent = percent(summary.Health.DocumentedExportedSymbols, summary.Health.ExportedSymbols)
+	if includeGitChurn {
+		if err := applyGitChurn(root, parsedFiles, &summary, &report); err != nil {
 			return Report{}, err
 		}
-	} else {
-		detectDuplicates(parsedFiles, 35)
 	}
-	for _, f := range parsedFiles {
-		if duplicationEngine == duplicationEngineInternal {
-			summary.DuplicateTokens += f.duplicateTokens
-			summary.FunctionTokens += f.totalFunctionTokens
-		}
+	if err := detectProjectDuplication(root, parsedFiles, duplicationEngine, &summary); err != nil {
+		return Report{}, err
 	}
-	if duplicationEngine == duplicationEngineInternal {
-		summary.DuplicationPercent = percent(summary.DuplicateTokens, summary.FunctionTokens)
-	}
+	finalizeDuplicationSummary(parsedFiles, duplicationEngine, &summary)
 	report.Summary = summary
 	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, module != "")
 	finalizeReport(&report)
 	report.Hotspots = topHotspots(report.Files)
+	if includeGitChurn {
+		report.GitHotspots = topGitHotspots(report.Files)
+	}
 	return report, nil
 }
 
-func newReport(root string, includeTests bool, duplicationEngine string) Report {
+func collectPackageHealth(files []*sourceFile, module string, summary *Summary) {
+	graph := analyzePackageGraph(files, module)
+	for _, file := range files {
+		value := graph[file.packagePath]
+		file.packageFanIn = value.incoming
+		file.packageDependencyDepth = value.depth
+		if value.cycle {
+			file.packageImportCycles = 1
+		}
+		summary.Health.ExportedSymbols += file.exportedSymbols
+		summary.Health.DocumentedExportedSymbols += file.documentedExportedSymbols
+		summary.Health.IgnoredReturnValues += file.ignoredReturnValues
+		summary.Health.Panics += file.panics
+		summary.Health.TODOs += file.todos
+		summary.Health.FIXMEs += file.fixmes
+		summary.Health.Goroutines += file.goroutines
+		summary.Health.ChannelOperations += file.channelOperations
+		summary.Health.ImportCycles += file.packageImportCycles
+	}
+}
+
+func detectProjectDuplication(root string, files []*sourceFile, engine string, summary *Summary) error {
+	if engine == duplicationEngineJSCPDRS {
+		return detectWithJSCPDRS(root, files, summary)
+	}
+	detectDuplicates(files, 35)
+	return nil
+}
+
+func finalizeDuplicationSummary(files []*sourceFile, engine string, summary *Summary) {
+	if engine != duplicationEngineInternal {
+		return
+	}
+	for _, file := range files {
+		summary.DuplicateTokens += file.duplicateTokens
+		summary.FunctionTokens += file.totalFunctionTokens
+	}
+	summary.DuplicationPercent = percent(summary.DuplicateTokens, summary.FunctionTokens)
+}
+
+func newReport(root string, includeTests, includeGitChurn bool, duplicationEngine string) Report {
 	return Report{
 		SchemaVersion: "1.0", ScoringVersion: scoringVersion, Language: "go", MaxScore: 10,
-		Configuration: Configuration{IncludeTests: includeTests, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine},
+		Configuration: Configuration{IncludeTests: includeTests, IncludeGitChurn: includeGitChurn, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine},
 		Repository:    root, AnalysisStatus: "complete", Packages: []PackageReport{}, Files: []FileReport{},
 		Hotspots: []FileReport{}, Warnings: []string{},
 	}
 }
 
-func parseSourceFiles(paths []string, root string, summary *Summary, report *Report) ([]*sourceFile, error) {
-	rootDir := moduleSearchRoot(root)
-	parsedFiles := make([]*sourceFile, 0, len(paths))
-	for _, path := range paths {
-		src, err := os.ReadFile(path)
-		if err != nil {
-			report.Warnings = append(report.Warnings, path+": "+err.Error())
-			continue
-		}
-		if generatedHeader.Match(src[:minInt(len(src), 2048)]) {
-			summary.ExcludedGeneratedFiles++
-			continue
-		}
-		relativePath, err := filepath.Rel(rootDir, path)
-		if err != nil {
-			return nil, err
-		}
-		file, err := scanGo(path, relativePath, src)
-		if err != nil {
-			report.Warnings = append(report.Warnings, relativePath+": "+err.Error())
-			continue
-		}
-		parsedFiles = append(parsedFiles, file)
-		summary.GoFiles++
-		summary.SourceLines += file.lines
-		summary.Functions += len(file.funcs)
+func applyGitChurn(root string, files []*sourceFile, summary *Summary, report *Report) error {
+	output, err := exec.Command("git", "-C", root, "log", "--format=", "--numstat", "--all", "--", ".").Output()
+	if err != nil {
+		return fmt.Errorf("read Git history: %w", err)
 	}
-	return parsedFiles, nil
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func assignPackageDependencies(files []*sourceFile, module string) {
-	deps := map[string]map[string]bool{}
-	for _, file := range files {
-		if deps[file.packagePath] == nil {
-			deps[file.packagePath] = map[string]bool{}
+	byPath := map[string]int{}
+	for _, line := range strings.Split(string(output), "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 || parts[0] == "-" || parts[1] == "-" {
+			continue
 		}
-		for _, imp := range file.imports {
-			if withinModule(imp, module) {
-				deps[file.packagePath][imp] = true
-				file.internalImports++
-			}
+		added, addErr := strconv.Atoi(parts[0])
+		deleted, deleteErr := strconv.Atoi(parts[1])
+		if addErr != nil || deleteErr != nil {
+			continue
 		}
+		byPath[filepath.ToSlash(parts[2])] += added + deleted
 	}
 	for _, file := range files {
-		file.packageFanOut = len(deps[file.packagePath])
+		file.gitChurn = byPath[file.path]
+		summary.Health.GitChurn += file.gitChurn
 	}
+	return nil
+}
+
+func topGitHotspots(files []FileReport) []FileReport {
+	result := append([]FileReport(nil), files...)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Health.GitChurn == result[j].Health.GitChurn {
+			return result[i].Path < result[j].Path
+		}
+		return result[i].Health.GitChurn > result[j].Health.GitChurn
+	})
+	if len(result) > 5 {
+		result = result[:5]
+	}
+	return result
 }
 
 func finalizeReport(report *Report) {

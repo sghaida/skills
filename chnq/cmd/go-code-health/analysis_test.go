@@ -180,3 +180,65 @@ func TestInternalPackageCoupling(t *testing.T) {
 		t.Errorf("want 9 dependencies: %+v", report.Packages)
 	}
 }
+
+func TestHealthMetricsAndFindings(t *testing.T) {
+	root := makeRepo(t, true)
+	writeFixture(t, root, "code.go", `package p
+
+// Documented is part of the public API.
+func Documented() {}
+
+func Undocumented() {
+	_ = helper()
+	panic("bad")
+}
+
+func helper() int {
+	// TODO: finish this path
+	go func() { ch <- 1 }()
+	<-ch
+	return 1
+}
+
+var ch = make(chan int)
+`)
+	report, err := analyze(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := report.Summary.Health
+	if health.ExportedSymbols != 2 || health.DocumentedExportedSymbols != 1 {
+		t.Fatalf("unexpected documentation metrics: %+v", health)
+	}
+	if health.IgnoredReturnValues != 1 || health.Panics != 1 || health.TODOs != 1 {
+		t.Fatalf("unexpected error metrics: %+v", health)
+	}
+	if health.Goroutines != 1 || health.ChannelOperations != 2 {
+		t.Fatalf("unexpected concurrency metrics: %+v", health)
+	}
+	found := map[string]bool{}
+	for _, finding := range report.Files[0].Findings {
+		found[finding.Rule] = true
+	}
+	for _, rule := range []string{"undocumented-exported-symbols", "ignored-return-value", "panic-usage"} {
+		if !found[rule] {
+			t.Errorf("missing finding %q: %+v", rule, report.Files[0].Findings)
+		}
+	}
+}
+
+func TestPackageGraphMetrics(t *testing.T) {
+	root := makeRepo(t, true)
+	writeFixture(t, root, "a/a.go", "package a\nimport _ \"example.com/project/b\"\nfunc A() {}\n")
+	writeFixture(t, root, "b/b.go", "package b\nimport _ \"example.com/project/a\"\nfunc B() {}\n")
+	report, err := analyze(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.Health.ImportCycles != 2 {
+		t.Fatalf("expected both packages in cycle, got %+v", report.Summary.Health)
+	}
+	if report.Packages[0].IncomingDependencies != 1 || report.Packages[1].IncomingDependencies != 1 {
+		t.Fatalf("unexpected fan-in: %+v", report.Packages)
+	}
+}

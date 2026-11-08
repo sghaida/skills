@@ -241,7 +241,8 @@ func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 		Path: f.path, Package: f.packageName, Score: score, Classification: classification(score),
 		Lines: f.lines, Functions: []FunctionReport{}, InternalImports: f.internalImports,
 		DuplicateTokens: duplicateTokens, TotalFunctionTokens: totalFunctionTokens,
-		DuplicationPercent: dup, Dimensions: d, Findings: findingsForFile(f, dup, moduleAvailable),
+		DuplicationPercent: dup, Dimensions: d, Health: healthMetricsForFile(f),
+		Findings: findingsForFile(f, dup, moduleAvailable),
 	}
 	for _, fn := range f.funcs {
 		r.Functions = append(r.Functions, fn.report)
@@ -253,6 +254,18 @@ func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 		return r.Findings[i].Line < r.Findings[j].Line
 	})
 	return r
+}
+
+func healthMetricsForFile(f *sourceFile) HealthMetrics {
+	return HealthMetrics{
+		ExportedSymbols: f.exportedSymbols, DocumentedExportedSymbols: f.documentedExportedSymbols,
+		DocumentationPercent: percent(f.documentedExportedSymbols, f.exportedSymbols),
+		IgnoredReturnValues:  f.ignoredReturnValues, Panics: f.panics, TODOs: f.todos, FIXMEs: f.fixmes,
+		Goroutines: f.goroutines, ChannelOperations: f.channelOperations,
+		ImportCycles: f.packageImportCycles, DependencyDepth: f.packageDependencyDepth,
+		IncomingDependencies: f.packageFanIn,
+		GitChurn:             f.gitChurn,
+	}
 }
 
 func duplicationStats(f *sourceFile) (int, int, float64) {
@@ -277,10 +290,20 @@ func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent floa
 }
 
 func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
+	findings := findingsForFunctions(f.funcs)
+	findings = appendFileFindings(findings, f, duplicationPercent, moduleAvailable)
+	return findings
+}
+
+func findingsForFunctions(functions []*functionData) []Finding {
 	findings := make([]Finding, 0)
-	for _, fn := range f.funcs {
+	for _, fn := range functions {
 		findings = append(findings, findingsForFunction(fn)...)
 	}
+	return findings
+}
+
+func appendFileFindings(findings []Finding, f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
 	if duplicationPercent >= 10 {
 		findings = append(findings, Finding{"duplicate-blocks", "warning", 0, format1(duplicationPercent) + "% of function tokens match another function"})
 	}
@@ -289,6 +312,23 @@ func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable 
 	}
 	if f.lines > 600 {
 		findings = append(findings, Finding{"large-file", "warning", 0, itoa(f.lines) + " total lines"})
+	}
+	if f.exportedSymbols > 0 && f.documentedExportedSymbols < f.exportedSymbols {
+		findings = append(findings, Finding{"undocumented-exported-symbols", "warning", 0,
+			itoa(f.exportedSymbols-f.documentedExportedSymbols) + " exported symbols lack documentation"})
+	}
+	if f.ignoredReturnValues > 0 {
+		findings = append(findings, Finding{"ignored-return-value", "warning", 0,
+			itoa(f.ignoredReturnValues) + " return values are discarded"})
+	}
+	if f.panics > 0 {
+		findings = append(findings, Finding{"panic-usage", "warning", 0, itoa(f.panics) + " panic calls"})
+	}
+	if f.packageImportCycles > 0 {
+		findings = append(findings, Finding{"import-cycle", "high", 0, "Package participates in an internal import cycle"})
+	}
+	if f.gitChurn > 1000 {
+		findings = append(findings, Finding{"high-git-churn", "warning", 0, itoa(f.gitChurn) + " changed lines across Git history"})
 	}
 	return findings
 }
@@ -314,6 +354,11 @@ func findingsForFunction(fn *functionData) []Finding {
 // weightedDimensions aggregates file reports using each file's line count as
 // its weight, while averaging each dimension only across reports that provide it.
 func weightedDimensions(files []FileReport) (Dimensions, float64) {
+	sum, sizes, total, totalWeight := weightedTotals(files)
+	return dimensionsFromTotals(sum, sizes, total, totalWeight)
+}
+
+func weightedTotals(files []FileReport) ([4]float64, [4]float64, float64, float64) {
 	sum := [4]float64{}
 	sizes := [4]float64{}
 	total, totalWeight := 0.0, 0.0
@@ -329,6 +374,10 @@ func weightedDimensions(files []FileReport) (Dimensions, float64) {
 			}
 		}
 	}
+	return sum, sizes, total, totalWeight
+}
+
+func dimensionsFromTotals(sum, sizes [4]float64, total, totalWeight float64) (Dimensions, float64) {
 	d := Dimensions{}
 	dimensions := []*float64{d.Complexity, d.Structure, d.Duplication, d.Coupling}
 	for i := range dimensions {
@@ -366,10 +415,27 @@ func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageRe
 		group := packages[name]
 		_, score := weightedDimensions(group)
 		lines := 0
+		var health HealthMetrics
 		for _, f := range group {
 			lines += f.Lines
+			health.ExportedSymbols += f.Health.ExportedSymbols
+			health.DocumentedExportedSymbols += f.Health.DocumentedExportedSymbols
+			health.IgnoredReturnValues += f.Health.IgnoredReturnValues
+			health.Panics += f.Health.Panics
+			health.TODOs += f.Health.TODOs
+			health.FIXMEs += f.Health.FIXMEs
+			health.Goroutines += f.Health.Goroutines
+			health.ChannelOperations += f.Health.ChannelOperations
+			health.ImportCycles += f.Health.ImportCycles
+			health.IncomingDependencies = f.Health.IncomingDependencies
+			health.DependencyDepth = f.Health.DependencyDepth
 		}
-		packageReports = append(packageReports, PackageReport{Path: name, Score: score, Files: len(group), Lines: lines, InternalDependencies: depCounts[name]})
+		health.DocumentationPercent = percent(health.DocumentedExportedSymbols, health.ExportedSymbols)
+		packageReports = append(packageReports, PackageReport{
+			Path: name, Score: score, Files: len(group), Lines: lines,
+			InternalDependencies: depCounts[name], IncomingDependencies: health.IncomingDependencies,
+			DependencyDepth: health.DependencyDepth,
+		})
 	}
 	dims, score := weightedDimensions(results)
 	return results, packageReports, dims, ptr(score)

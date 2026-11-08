@@ -32,7 +32,8 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
    from the diff or from memory.
 5. Treat the project as not passing when `analysis_status` is not `complete`,
    `code_health_score` is missing, the overall score is below
-   `minimum_score`, or any configured dimension is below its threshold.
+   `minimum_score`, any configured dimension is below its threshold, or any
+   configured `health_thresholds` value fails its minimum/maximum comparison.
 6. If the pre-task scan fails the policy, prioritize code-health remediation:
    update the code to meet at least the configured overall and dimension
    thresholds before proceeding with unrelated requested changes. Re-run the
@@ -95,6 +96,9 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 # Optional test code inclusion
 ./scripts/analyze.sh /path/to/go/repository --include-tests
 
+# Optional Git churn hotspots
+./scripts/analyze.sh /path/to/go/repository --include-git-churn
+
 # CI gate: exit 3 if score < 7.0
 ./scripts/analyze.sh /path/to/go/repository --fail-under 7
 ```
@@ -102,7 +106,9 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 For a project policy, read `.go-code-health.json`, use its
 `duplication_engine`, and pass its `include_tests` setting to the scan. Use
 `--fail-under` for the configured `minimum_score`, then compare every
-configured `minimum_dimensions` threshold with the JSON report.
+configured `minimum_dimensions` threshold and `health_thresholds` value with
+the JSON report. Use `--include-git-churn` when `maximum_git_churn` is
+configured.
 
 ## Metric explanations for engineers
 
@@ -124,6 +130,38 @@ Use these simple explanations when asking an engineer to choose thresholds:
 - **`include_tests`:** Whether `_test.go` files are included. Keep it `false`
   for production-code health only, or set it to `true` when test code is part
   of the maintainability target.
+
+The report also includes non-scoring health measurements. Documentation
+coverage is a percentage; ignored returns, panics, TODOs, FIXME markers,
+import cycles, dependency depth, incoming dependencies, and Git churn are
+count/risk metrics where lower is generally preferred. Exported symbol,
+goroutine, and channel-operation counts are descriptive and have no universal
+healthy direction. These measurements produce findings where appropriate but
+do not alter the four-dimensional score.
+
+When reporting them, do not list raw values without an outcome. Use this
+format:
+
+```text
+Additional health metrics: FAIL
+- Documentation: 0.0% (minimum 80.0%) — FAIL
+- Ignored return values: 2 (maximum 0) — FAIL
+- Panics: 0 (maximum 0) — PASS
+- Import cycles: 0 (maximum 0) — PASS
+- Dependency depth: 0 (maximum 8) — PASS
+- Incoming dependencies: 0 (maximum 20) — PASS
+- TODO/FIXME: 0/0 (maximum 20/0) — PASS
+- API, goroutine, and channel counts: informational only
+```
+
+If no `health_thresholds` are configured, label the section
+**Additional health metrics: INFORMATIONAL** and show each measured value
+without implying pass/fail. If a configured metric is unavailable, label it
+**UNAVAILABLE** and fail the policy rather than silently treating it as zero.
+
+`--include-git-churn` reads Git history and adds changed-line counts to the
+health report, including up to five `git_hotspots`. It is disabled by default
+so source-only scans remain deterministic across checkouts.
 
 Requirements: Go 1.27.3 or newer and a POSIX shell. An older Go installation can auto-download the required toolchain when network access is allowed. The command reads source files but **never builds, runs, or tests the analyzed repository**. The wrapper builds only this skill's bundled analyzer using Go's standard library. It may download the Go toolchain if the installed one is older. It returns exit code 0 for complete analysis, 2 for input/parse/incomplete analysis errors, and 3 for a failing `--fail-under` threshold.
 
@@ -174,6 +212,7 @@ Never invent file paths, findings, counts, or scores. Use the actual JSON output
 - Four measured dimensions: branching/nesting complexity (40%), function/file structure (25%), exact token duplication (20%), and intra-module package fan-out (15%).
 - Missing `go.mod`: no coupling score; remaining weights are renormalized.
 - Generated files, vendor directories, hidden directories, `testdata`, and `*_test.go` are excluded by default. Test files may be included explicitly.
-- Unsupported in v0.1: cohesion, semantic duplication, cross-module dependencies, architecture layer violations, Git change hotspots, trend history, and measured testability.
+- Unsupported: cohesion, semantic duplication, cross-module dependencies,
+  architecture layer violations, trend history, and measured testability.
 - Read [references/scoring-model.md](references/scoring-model.md) when users ask how the score is computed or need to assess its limitations.
 - Read [references/response-schema.md](references/response-schema.md) for the output fields and CI behavior.

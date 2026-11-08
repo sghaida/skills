@@ -110,13 +110,21 @@ make run TARGET=/path/to/your/go/repo ARGS="--fail-under 7"
 - Oversized functions and files
 - Exact repeated 35-token blocks across functions
 - Go-module-local package coupling
+- Exported API documentation coverage
+- Discarded return values and `panic` usage
+- TODO/FIXME markers and concurrency operations
+- Package fan-in, dependency depth, and import cycles
+- Optional Git changed-line hotspots (`--include-git-churn`)
 
 Scores range from 0.0 to 10.0. The model is a custom heuristic and is not
 equivalent to SonarQube, CodeScene, or an ISO certification.
 
-It does not measure test correctness, test coverage, security, type errors, Git
-churn, cohesion, architecture layer violations, or semantic clones. It never
-executes code from the repository under analysis.
+The additional health metrics are reported as measurements and findings; they
+are not folded into the four-dimensional score. Git churn is opt-in because it
+depends on repository history and is not a source-only signal. The analyzer
+does not measure test correctness, test coverage, security, type errors,
+cohesion, architecture layer violations, or semantic clones. It never executes
+code from the repository under analysis.
 
 ### How metrics are calculated
 
@@ -222,8 +230,27 @@ scan a Go module directory directly when the repository contains multiple
 modules.
 
 Coupling is a simple dependency-count signal. It does not measure reverse
-dependencies, symbol-level usage, dependency depth, interface quality,
-architecture boundaries, or whether a dependency is easy to replace.
+dependencies, symbol-level usage, interface quality, architecture boundaries,
+or whether a dependency is easy to replace.
+
+#### Additional health metrics
+
+The JSON report includes a `health` object at repository and file level:
+
+- `exported_symbols` and `documentation_percent` measure public API
+  documentation coverage.
+- `ignored_return_values` and `panics` identify reliability review points.
+- `todos`, `fixmes`, `goroutines`, and `channel_operations` provide
+  maintainability and concurrency indicators.
+- `incoming_dependencies`, `dependency_depth`, and `import_cycles` describe
+  package graph structure.
+- `git_churn` is populated only with `--include-git-churn`; `git_hotspots`
+  contains the five files with the most changed lines.
+
+These are deliberately exposed as raw measurements and findings rather than
+new score dimensions, so existing score thresholds remain comparable across
+scans. Findings include undocumented exports, discarded return values, panic
+usage, import cycles, and high Git churn.
 
 #### Aggregation
 

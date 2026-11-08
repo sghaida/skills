@@ -1,4 +1,4 @@
-# Go Code Health Scoring Model (go-v0.1.0)
+# Go Code Health Scoring Model (go-v0.2.0)
 
 ## Scope and intent
 
