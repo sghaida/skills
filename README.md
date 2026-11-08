@@ -158,6 +158,57 @@ is files; `package` aggregates low-scoring files by enclosing package:
   --explain-hotspots --hotspots-scope package
 ```
 
+### Benchmark and latency results
+
+The analyzer includes repeatable benchmarks for cold, cached, and incremental
+scans in
+[`benchmark_test.go`](chnq/cmd/go-code-health/benchmark_test.go). Run them
+from the repository root with:
+
+```sh
+cd chnq
+GOWORK=off go test ./cmd/go-code-health \
+  -run '^$' \
+  -bench 'Benchmark(Cold|Cached|Incremental)Scan$' \
+  -benchmem -count=5
+```
+
+The following results are the median of five benchmark runs on an Apple M5
+Pro, arm64, using the Go 1.27.3 toolchain and a generated 32-file Go
+fixture:
+
+| Benchmark | Median latency | Allocations |
+| --- | ---: | ---: |
+| Cold scan | 1.82 ms/op | 5,793 allocs/op |
+| Cached scan validation and reuse | 0.60 ms/op | 993 allocs/op |
+| Incremental scan with one changed file | 1.88 ms/op | 2,383 allocs/op |
+
+These are analyzer-core measurements and exclude shell startup, process
+startup, and terminal rendering. They are reference results rather than
+universal guarantees; hardware, Go toolchain, repository size, worker count,
+duplication engine, and filesystem state affect latency. The cached benchmark
+includes repository hash calculation and cache validation. The incremental
+benchmark includes changed-file detection, rescanning, report merging, and
+cache writing.
+
+#### Current `chnq` module perspective
+
+For perspective, the current `chnq` module contains 13 Go files, 3,637 source
+lines, and 267 functions. An end-to-end run of the installed skill on this
+module produced these approximate latencies:
+
+| Scan type | Approximate latency |
+| --- | ---: |
+| Full scan with `--no-cache` | 60 ms |
+| Cached scan | 50 ms |
+| Incremental scan with one changed file | 50 ms |
+
+These measurements include process startup, repository hashing, JSON output,
+and cache handling. The small project size means startup overhead dominates,
+so cached and incremental scans are close to the full-scan time. Larger
+repositories should see a more noticeable benefit from avoiding unchanged
+file parsing.
+
 ### Project policy and required health gate
 
 For ongoing agentic development, keep a checked-in `.go-code-health.json` at

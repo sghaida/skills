@@ -22,7 +22,7 @@ func makeRepo(t *testing.T, withModule bool) string {
 	return dir
 }
 
-func writeFixture(t *testing.T, root, name, content string) {
+func writeFixture(t testing.TB, root, name, content string) {
 	t.Helper()
 	p := filepath.Join(root, name)
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {

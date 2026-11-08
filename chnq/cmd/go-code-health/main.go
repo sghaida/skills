@@ -390,7 +390,10 @@ func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
 	}
 
 	duration := time.Since(start).Milliseconds()
-	if cacheErr := cacheMgr.WriteCache(&report, "", duration, cfg.path); cacheErr != nil {
+	codeHash, hashErr := cacheMgr.ComputeRepositoryHash(cfg.path)
+	if hashErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to hash repository for cache: %v\n", hashErr)
+	} else if cacheErr := cacheMgr.WriteCache(&report, codeHash, duration, cfg.path); cacheErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to write cache: %v\n", cacheErr)
 	}
 
