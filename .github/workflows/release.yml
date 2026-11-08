@@ -1,0 +1,107 @@
+name: Release Go Code Health Skill
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: chnq/go.mod
+
+      - name: Test
+        working-directory: chnq
+        run: GOWORK=off go test ./...
+
+      - name: Vet
+        working-directory: chnq
+        run: GOWORK=off go vet ./...
+
+      - name: Build release archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          name="go-code-health-${TAG}-${GOOS}-${GOARCH}"
+          staging="$RUNNER_TEMP/$name"
+          mkdir -p "$staging/bin" "$staging/scripts"
+
+          (cd chnq && GOWORK=off CGO_ENABLED=0 go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o "$staging/bin/go-code-health" \
+            ./cmd/go-code-health)
+
+          cp chnq/SKILL.md "$staging/"
+          cp -R chnq/references "$staging/"
+          cp -R chnq/examples "$staging/"
+          cp chnq/scripts/analyze.sh "$staging/scripts/"
+          cp install.sh "$staging/"
+          chmod +x "$staging/install.sh" "$staging/scripts/analyze.sh" "$staging/bin/go-code-health"
+          tar -C "$RUNNER_TEMP" -czf "$GITHUB_WORKSPACE/$name.tar.gz" "$name"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-code-health-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            go-code-health-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: go-code-health-${{ github.ref_name }}-*
+          merge-multiple: true
+
+      - name: Add installer
+        run: cp install.sh dist/install.sh
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum install.sh *.tar.gz > checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/install.sh
+            dist/checksums.txt
+          generate_release_notes: true

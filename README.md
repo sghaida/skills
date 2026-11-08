@@ -314,10 +314,53 @@ This is also a qualitative design observation. A file or package is not a
 problem merely because it contains several functions; the responsibilities
 must be meaningfully unrelated.
 
-### Install as an agent skill
+### Installation
 
-Copy the entire `chnq` folder, not just `SKILL.md`, into the agent's skills
-directory. Common options include:
+#### Install as an agent skill for users
+
+For end users on macOS or Linux, download the release installer:
+
+```sh
+curl --fail --location \
+  https://github.com/sghaida/skills/releases/latest/download/install.sh \
+  --output install.sh
+chmod +x install.sh
+./install.sh
+```
+
+The installer asks whether to install for Claude, Codex, or Copilot, and
+whether to install for the current project or the user environment. It
+downloads the matching prebuilt analyzer binary automatically. Go is not
+required.
+
+Release installations use the bundled native binary and do not require Go.
+
+You can also download a specific tagged installer:
+
+```sh
+curl --fail --location \
+  https://github.com/sghaida/skills/releases/download/v1.0.0/install.sh \
+  --output install.sh
+chmod +x install.sh
+./install.sh
+```
+
+Non-interactive examples:
+
+```sh
+./install.sh --target claude --scope user
+./install.sh --target codex --scope project
+./install.sh --target copilot --scope user
+```
+
+Releases are published only when a `v*` Git tag is pushed and include
+platform-specific archives and SHA-256 checksums. The standalone
+`install.sh` file is included in every release.
+
+#### Install as an agent skill for developers
+
+For repository development only, the source tree can still be installed
+manually into an agent's skills directory. Common options include:
 
 - Codex (project): `<repo>/.agents/skills/go-code-health/`
 - Codex (user): `~/.agents/skills/go-code-health/`

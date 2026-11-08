@@ -1,7 +1,7 @@
 ---
 name: go-code-health
 description: Measure and explain structural code health in Go repositories using a deterministic, read-only analyzer that returns a score from 0.0 to 10.0. Use when asked for a Go code health score, maintainability assessment, complexity, long functions, exact duplication, internal package coupling, unhealthy files, or refactoring priorities. Do not use for security audits, correctness claims, test coverage, or non-Go projects.
-compatibility: Requires Go 1.27.3+ (or automatic toolchain download) and POSIX sh. No external Go modules.
+compatibility: Release packages include a native analyzer binary and require POSIX sh. Source checkouts require Go 1.27.3+ (or automatic toolchain download). No external Go modules.
 ---
 
 # Go Code Health
@@ -124,6 +124,7 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 # Force a complete rescan
 ./scripts/analyze.sh /path/to/go/repository --no-cache
 ```
+
 
 For a project policy, read `.go-code-health.json`, use its
 `duplication_engine`, and pass its `include_tests` setting to the scan. Use
