@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -240,5 +244,61 @@ func TestPackageGraphMetrics(t *testing.T) {
 	}
 	if report.Packages[0].IncomingDependencies != 1 || report.Packages[1].IncomingDependencies != 1 {
 		t.Fatalf("unexpected fan-in: %+v", report.Packages)
+	}
+}
+
+func TestGitChurnPaths(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.com/git\n")
+	writeFixture(t, root, "main.go", "package main\nfunc main() {}\n")
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, output)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	run("add", ".")
+	run("commit", "-qm", "initial")
+	writeFixture(t, root, "main.go", "package main\nfunc main() { println(1) }\n")
+	run("add", "main.go")
+	run("commit", "-qm", "change")
+	report, err := analyzeWithOptions(root, false, true, 2)
+	if err != nil || len(report.GitHotspots) == 0 {
+		t.Fatalf("git churn analysis failed: %v %+v", err, report.GitHotspots)
+	}
+	if err := applyGitChurn(t.TempDir(), nil, &Summary{}, &Report{}); err == nil {
+		t.Fatal("expected git churn error outside a repository")
+	}
+}
+func TestComplexityAndDuplicationEdges(t *testing.T) {
+	src := `package demo
+func f(x interface{}) {
+	switch x.(type) { case int: }
+	select { case <-make(chan int): default: }
+	for range []int{1} {}
+	if true && false || true {}
+}`
+	file, err := parser.ParseFile(token.NewFileSet(), "edges.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := file.Decls[0].(*ast.FuncDecl)
+	complexity, depth := measureBody(fn.Body)
+	if complexity == 0 || depth == 0 {
+		t.Fatalf("expected control-flow complexity, got %d/%d", complexity, depth)
+	}
+	if clamp(-1) != 0 || clamp(11) != 10 || round1(1.26) != 1.3 || percent(1, 0) != 0 {
+		t.Fatal("numeric scoring edges failed")
+	}
+	files := make([]FileReport, 7)
+	for i := range files {
+		files[i] = FileReport{Path: string(rune('a' + i)), Score: float64(i)}
+	}
+	files[1].Score = files[0].Score
+	if len(topHotspots(files)) != 5 {
+		t.Fatal("hotspot limit was not applied")
 	}
 }

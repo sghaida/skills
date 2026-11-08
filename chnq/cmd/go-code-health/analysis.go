@@ -318,7 +318,15 @@ func analyze(path string, includeTests bool) (Report, error) {
 	return analyzeWithOptions(path, includeTests, false)
 }
 
-func analyzeWithOptions(path string, includeTests, includeGitChurn bool) (Report, error) {
+func analyzeWithOptions(path string, includeTests, includeGitChurn bool, workers ...int) (Report, error) {
+	workerCount := 10
+	if len(workers) > 0 {
+		workerCount = workers[0]
+	}
+	return analyzeWithOptionsFiltered(path, includeTests, includeGitChurn, workerCount, nil)
+}
+
+func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool, workers int, fileFilter map[string]bool) (Report, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
 		return Report{}, err
@@ -337,7 +345,17 @@ func analyzeWithOptions(path string, includeTests, includeGitChurn bool) (Report
 	}
 	module, _ := locateModule(root)
 	report := newReport(root, includeTests, includeGitChurn, duplicationEngine)
-	parsedFiles, err := parseSourceFiles(paths, root, &summary, &report)
+	if fileFilter != nil {
+		filtered := paths[:0]
+		for _, candidate := range paths {
+			relative, relativeErr := filepath.Rel(root, candidate)
+			if relativeErr == nil && fileFilter[filepath.ToSlash(relative)] {
+				filtered = append(filtered, candidate)
+			}
+		}
+		paths = filtered
+	}
+	parsedFiles, err := parseSourceFiles(paths, root, &summary, &report, workers)
 	if err != nil {
 		return Report{}, err
 	}

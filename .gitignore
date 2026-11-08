@@ -10,6 +10,8 @@ coverage.out
 .DS_Store
 *.swp
 *.swo
+.chnq-health-status
+.chnq-health-status.tmp
 
 # VS Code local workspace files
 .vscode/

@@ -15,7 +15,7 @@ ARGS ?=
 CLAUDE_SKILLS_DIR ?= $(HOME)/.claude/skills
 CLAUDE_SKILL_DIR := $(CLAUDE_SKILLS_DIR)/go-code-health
 
-.PHONY: help deps install-deps build run cmd test vet install-claude install-codex install-github install-jscpd-rs clean
+.PHONY: help deps install-deps build run cmd test test-cover coverage vet install-claude install-codex install-github install-jscpd-rs clean
 
 help:
 	@printf '%s\n' \
@@ -25,6 +25,8 @@ help:
 	  'make run              Build and run scanner (TARGET=chnq FORMAT=json ARGS="")' \
 	  'make cmd              Run scanner using go run (without saving a binary)' \
 	  'make test             Run all Go tests' \
+	  'make test-cover       Run tests and report production-file coverage' \
+	  'make coverage         Run tests and require 90% coverage per Go source file' \
 	  'make vet              Run go vet' \
 	  'make install-claude   Install the skill to ~/.claude/skills/go-code-health' \
 	  'make install-codex    Install the skill to ~/.agents/skills/go-code-health' \
@@ -65,6 +67,15 @@ cmd:
 
 test:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) test ./...
+
+test-cover:
+	@set -eu; \
+	profile=$$(mktemp "$${TMPDIR:-/tmp}/go-code-health-cover.XXXXXX"); \
+	trap 'rm -f "$$profile"' EXIT INT TERM; \
+	(cd "$(PROJECT_DIR)" && GOWORK=off $(GO) test ./... -coverprofile="$$profile"); \
+	awk 'NR == 1 { next } { split($$1, location, ":"); file = location[1]; if (file ~ /_test\.go$$/) next; total[file] += $$2; if ($$3 > 0) covered[file] += $$2 } END { failed = 0; for (file in total) { percentage = 100 * covered[file] / total[file]; printf "%6.1f%% %s\n", percentage, file; if (percentage < 90) failed = 1 } exit failed }' "$$profile"
+
+coverage: test-cover
 
 vet:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) vet ./...

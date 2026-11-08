@@ -66,21 +66,62 @@ func isExcludedTest(name string, includeTests bool) bool {
 	return strings.HasSuffix(name, "_test.go") && !includeTests
 }
 
-func parseSourceFiles(paths []string, root string, summary *Summary, report *Report) ([]*sourceFile, error) {
+func parseSourceFiles(paths []string, root string, summary *Summary, report *Report, workers int) ([]*sourceFile, error) {
 	rootDir := moduleSearchRoot(root)
-	parsedFiles := make([]*sourceFile, 0, len(paths))
-	for _, path := range paths {
-		file, ok, err := parseSourceFile(path, rootDir, summary, report)
-		if err != nil {
-			return nil, err
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(paths) {
+		workers = len(paths)
+	}
+
+	type result struct {
+		index   int
+		file    *sourceFile
+		ok      bool
+		summary Summary
+		report  Report
+		err     error
+	}
+	jobs := make(chan int)
+	results := make(chan result, len(paths))
+	for i := 0; i < workers; i++ {
+		go func() {
+			for index := range jobs {
+				localSummary := Summary{}
+				localReport := Report{}
+				file, ok, err := parseSourceFile(paths[index], rootDir, &localSummary, &localReport)
+				results <- result{index: index, file: file, ok: ok, summary: localSummary, report: localReport, err: err}
+			}
+		}()
+	}
+	go func() {
+		for i := range paths {
+			jobs <- i
 		}
-		if !ok {
+		close(jobs)
+	}()
+
+	ordered := make([]result, len(paths))
+	for range paths {
+		item := <-results
+		ordered[item.index] = item
+	}
+
+	parsedFiles := make([]*sourceFile, 0, len(paths))
+	for _, item := range ordered {
+		if item.err != nil {
+			return nil, item.err
+		}
+		summary.ExcludedGeneratedFiles += item.summary.ExcludedGeneratedFiles
+		report.Warnings = append(report.Warnings, item.report.Warnings...)
+		if !item.ok {
 			continue
 		}
-		parsedFiles = append(parsedFiles, file)
+		parsedFiles = append(parsedFiles, item.file)
 		summary.GoFiles++
-		summary.SourceLines += file.lines
-		summary.Functions += len(file.funcs)
+		summary.SourceLines += item.file.lines
+		summary.Functions += len(item.file.funcs)
 	}
 	return parsedFiles, nil
 }

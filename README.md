@@ -34,6 +34,25 @@ below the requested threshold:
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --fail-under 7
 ```
 
+Scans use a local `.chnq-health-status` cache (ignored by Git). Unchanged
+repositories reuse the cached report; when the cache detects a partial change,
+only changed files are rescanned and merged with unchanged results. File
+parsing uses 10 workers by default and can be tuned with `--workers 1-256`.
+Use `--no-cache` for a complete rescan:
+
+```sh
+./chnq/scripts/analyze.sh /path/to/your/go/repo --workers 20
+./chnq/scripts/analyze.sh /path/to/your/go/repo --no-cache
+```
+
+Generate deterministic hotspot explanations without an LLM. The default scope
+is files; `package` aggregates low-scoring files by enclosing package:
+
+```sh
+./chnq/scripts/analyze.sh /path/to/your/go/repo \
+  --explain-hotspots --hotspots-scope package
+```
+
 ### Project policy and required health gate
 
 For ongoing agentic development, keep a checked-in `.go-code-health.json` at

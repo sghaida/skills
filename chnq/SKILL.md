@@ -83,6 +83,19 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
     `internal` engine is dependency-free. The `jscpd-rs` engine invokes the
     external `jscpd` command; if it is selected but unavailable, report the
     setup error and do not silently fall back to the internal engine.
+17. The analyzer uses a bounded worker pool for file parsing. The default is
+    10 workers; pass `--workers N` to select 1–256 workers. Results are ordered
+    deterministically, so changing worker count must not change the report.
+18. The analyzer stores an optional local cache in `.chnq-health-status`.
+    When the repository hash matches, the complete report is reused. When only
+    some files changed, the changed files are rescanned and merged with
+    unchanged cached file reports. The cache is machine-local and must remain
+    git-ignored; use `--no-cache` to force a complete scan.
+19. Use `--explain-hotspots` for a deterministic Markdown summary. The
+    default `--hotspots-scope file` explains file hotspots; use
+    `--hotspots-scope package` to aggregate low-scoring files by enclosing
+    package. These explanations are generated from measured report data and
+    source patterns; an LLM is not required.
 
 ## Run
 
@@ -101,6 +114,15 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 
 # CI gate: exit 3 if score < 7.0
 ./scripts/analyze.sh /path/to/go/repository --fail-under 7
+
+# Parallel scan with local cache
+./scripts/analyze.sh /path/to/go/repository --workers 10
+
+# Explain file or package hotspots
+./scripts/analyze.sh /path/to/go/repository --explain-hotspots --hotspots-scope package
+
+# Force a complete rescan
+./scripts/analyze.sh /path/to/go/repository --no-cache
 ```
 
 For a project policy, read `.go-code-health.json`, use its

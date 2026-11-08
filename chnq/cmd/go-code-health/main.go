@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const scoringVersion = "go-v0.2.0"
@@ -163,18 +164,28 @@ func writeTextWarnings(w io.Writer, report Report) {
 	}
 }
 
+func writeFinding(w io.Writer, finding Finding) {
+	fmt.Fprintf(w, "   - %s: %s\n", finding.Rule, finding.Message)
+}
+
+func writeFileHotspot(w io.Writer, index int, file FileReport) {
+	fmt.Fprintf(w, "%d. %.1f/10 %s\n", index+1, file.Score, file.Path)
+	count := len(file.Findings)
+	if count > 3 {
+		count = 3
+	}
+	for j := 0; j < count; j++ {
+		writeFinding(w, file.Findings[j])
+	}
+}
+
 func writeTextHotspots(w io.Writer, report Report) {
-	if len(report.Hotspots) > 0 {
-		fmt.Fprintln(w, "\nFiles needing attention:")
-		for i, f := range report.Hotspots {
-			fmt.Fprintf(w, "%d. %.1f/10 %s\n", i+1, f.Score, f.Path)
-			for j, finding := range f.Findings {
-				if j >= 3 {
-					break
-				}
-				fmt.Fprintf(w, "   - %s: %s\n", finding.Rule, finding.Message)
-			}
-		}
+	if len(report.Hotspots) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nFiles needing attention:")
+	for i, f := range report.Hotspots {
+		writeFileHotspot(w, i, f)
 	}
 }
 
@@ -182,42 +193,205 @@ func main() {
 	os.Exit(run())
 }
 
-func run() int {
+type RunConfig struct {
+	path              string
+	output            string
+	includeTests      bool
+	includeGitChurn   bool
+	failUnder         float64
+	workers           int
+	noCache           bool
+	cacheInfo         bool
+	cacheFile         string
+	explainHotspots   bool
+	hotspotsScope     string
+}
+
+func parseFlags() RunConfig {
 	path := flag.String("path", ".", "Go repository or directory to scan (read-only)")
 	output := flag.String("format", "json", "Output format: json or text")
 	includeTests := flag.Bool("include-tests", false, "Include *_test.go files")
 	includeGitChurn := flag.Bool("include-git-churn", false, "Include changed-line counts from Git history")
 	failUnder := flag.Float64("fail-under", -1, "Exit 3 if the score falls below the supplied 0-10 threshold")
+	workers := flag.Int("workers", 10, "Number of parallel workers (1-256)")
+	noCache := flag.Bool("no-cache", false, "Ignore cache, force full scan")
+	cacheInfo := flag.Bool("cache-info", false, "Show cache status without scanning")
+	cacheFile := flag.String("cache-file", ".chnq-health-status", "Cache file location")
+	explainHotspots := flag.Bool("explain-hotspots", false, "Generate detailed explanations for hotspots")
+	hotspotsScope := flag.String("hotspots-scope", "file", "Hotspots scope: file or package")
 	flag.Parse()
 
-	if err := validateFlags(*output, *failUnder); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+	return RunConfig{
+		path:            *path,
+		output:          *output,
+		includeTests:    *includeTests,
+		includeGitChurn: *includeGitChurn,
+		failUnder:       *failUnder,
+		workers:         *workers,
+		noCache:         *noCache,
+		cacheInfo:       *cacheInfo,
+		cacheFile:       *cacheFile,
+		explainHotspots: *explainHotspots,
+		hotspotsScope:   *hotspotsScope,
 	}
-	report, err := analyzeWithOptions(*path, *includeTests, *includeGitChurn)
+}
+
+func handleCacheInfo(cacheMgr *CacheManager) int {
+	cache, err := cacheMgr.ReadCache()
+	if err == nil && cache != nil {
+		fmt.Fprintf(os.Stderr, "Cache from: %s\nScan duration: %dms\n", cache.ScanTimestamp, cache.ScanDurationMs)
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "No valid cache found\n")
+	return 0
+}
+
+func checkCachedReport(cacheMgr *CacheManager, cfg RunConfig, currentHash string) (Report, bool) {
+	if cfg.noCache {
+		return Report{}, false
+	}
+
+	cached, err := cacheMgr.ReadCache()
+	if err != nil || cached == nil || cached.Version != scoringVersion || cached.CodeHash != currentHash {
+		return Report{}, false
+	}
+
+	if cached.Report == nil {
+		return Report{}, false
+	}
+
+	return *cached.Report, true
+}
+
+func generateExplanations(report *Report, cfg RunConfig) {
+	if !cfg.explainHotspots {
+		return
+	}
+	explainer := NewHotspotsExplainer(report, cfg.hotspotsScope)
+	explanations, err := explainer.GenerateExplanations()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "analysis error:", err)
-		return 2
+		fmt.Fprintf(os.Stderr, "warning: failed to generate hotspot explanations: %v\n", err)
+		return
 	}
-	if err := emitReport(*output, report); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	if report.AnalysisStatus != "complete" {
-		return 2
-	}
-	if *failUnder >= 0 && report.CodeHealthScore != nil && *report.CodeHealthScore < *failUnder {
+	fmt.Fprintf(os.Stderr, "\n%s\n", explanations)
+}
+
+func checkFailUnder(report Report, failUnder float64) int {
+	if failUnder >= 0 && report.CodeHealthScore != nil && *report.CodeHealthScore < failUnder {
 		return 3
 	}
 	return 0
 }
 
-func validateFlags(output string, failUnder float64) error {
+func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
+	start := time.Now()
+
+	var oldCache *CacheFile
+	var changedFiles map[string]bool
+
+	if !cfg.noCache {
+		cached, err := cacheMgr.ReadCache()
+		if err == nil && cached != nil && cached.Version == scoringVersion &&
+			cached.Report != nil && len(cached.FilesHashMap) > 0 {
+			currentFiles, hashErr := cacheMgr.ComputeRepositoryFileHashes(cfg.path, cfg.includeTests)
+			if hashErr == nil {
+				changedFiles = IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
+				if len(changedFiles) > 0 && len(changedFiles) < len(currentFiles) {
+					oldCache = cached
+				}
+			}
+		}
+	}
+
+	var report Report
+	var err error
+	if oldCache != nil {
+		report, err = analyzeWithOptionsFiltered(cfg.path, cfg.includeTests, cfg.includeGitChurn, cfg.workers, changedFiles)
+	} else {
+		report, err = analyzeWithOptions(cfg.path, cfg.includeTests, cfg.includeGitChurn, cfg.workers)
+	}
+
+	if err != nil {
+		return Report{}, err
+	}
+
+	if oldCache != nil {
+		report = *NewIncrementalUpdate(oldCache, &report, changedFiles).MergeReports()
+	}
+
+	duration := time.Since(start).Milliseconds()
+	if cacheErr := cacheMgr.WriteCache(&report, "", duration, cfg.path); cacheErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to write cache: %v\n", cacheErr)
+	}
+
+	return report, nil
+}
+
+func run() int {
+	cfg := parseFlags()
+
+	if err := validateFlags(cfg.output, cfg.failUnder, cfg.workers, cfg.hotspotsScope); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+
+	cacheMgr := NewCacheManager(cfg.cacheFile, scoringVersion)
+
+	if cfg.cacheInfo {
+		return handleCacheInfo(cacheMgr)
+	}
+
+	currentHash, err := cacheMgr.ComputeRepositoryHash(cfg.path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "hash error:", err)
+		return 2
+	}
+
+	report, found := checkCachedReport(cacheMgr, cfg, currentHash)
+	if found {
+		generateExplanations(&report, cfg)
+		if emitErr := emitReport(cfg.output, report); emitErr != nil {
+			fmt.Fprintln(os.Stderr, emitErr)
+			return 2
+		}
+		if report.AnalysisStatus != "complete" {
+			return 2
+		}
+		return checkFailUnder(report, cfg.failUnder)
+	}
+
+	report, err = performAnalysis(cacheMgr, cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "analysis error:", err)
+		return 2
+	}
+
+	generateExplanations(&report, cfg)
+
+	if emitErr := emitReport(cfg.output, report); emitErr != nil {
+		fmt.Fprintln(os.Stderr, emitErr)
+		return 2
+	}
+
+	if report.AnalysisStatus != "complete" {
+		return 2
+	}
+
+	return checkFailUnder(report, cfg.failUnder)
+}
+
+func validateFlags(output string, failUnder float64, workers int, hotspotsScope string) error {
 	if output != "json" && output != "text" {
 		return errors.New("invalid --format: expected json or text")
 	}
 	if failUnder > 10 || (failUnder < 0 && failUnder != -1) {
 		return errors.New("invalid --fail-under: expected 0-10")
+	}
+	if workers < 1 || workers > 256 {
+		return errors.New("invalid --workers: expected 1-256")
+	}
+	if hotspotsScope != "file" && hotspotsScope != "package" {
+		return errors.New("invalid --hotspots-scope: expected file or package")
 	}
 	return nil
 }
