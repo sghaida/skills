@@ -16,6 +16,7 @@ import (
 
 const scoringVersion = "go-v0.2.0"
 
+// dimensions contains the analyzer's four maintainability dimension scores
 type Dimensions struct {
 	Complexity  *float64 `json:"complexity"`
 	Structure   *float64 `json:"structure"`
@@ -23,6 +24,7 @@ type Dimensions struct {
 	Coupling    *float64 `json:"coupling"`
 }
 
+// healthmetrics contains measured health indicators for analyzed go files
 type HealthMetrics struct {
 	ExportedSymbols           int     `json:"exported_symbols"`
 	DocumentedExportedSymbols int     `json:"documented_exported_symbols"`
@@ -39,6 +41,7 @@ type HealthMetrics struct {
 	GitChurn                  int     `json:"git_churn,omitempty"`
 }
 
+// finding describes a measured analyzer finding
 type Finding struct {
 	Rule     string `json:"rule"`
 	Severity string `json:"severity"`
@@ -46,6 +49,7 @@ type Finding struct {
 	Message  string `json:"message"`
 }
 
+// functionreport contains measured metrics for one go function
 type FunctionReport struct {
 	Name                string `json:"name"`
 	Line                int    `json:"line"`
@@ -54,6 +58,7 @@ type FunctionReport struct {
 	MaxNesting          int    `json:"max_nesting"`
 }
 
+// filereport contains measured metrics and findings for one go source file
 type FileReport struct {
 	Path                string           `json:"path"`
 	Package             string           `json:"package"`
@@ -70,6 +75,7 @@ type FileReport struct {
 	Findings            []Finding        `json:"findings"`
 }
 
+// packagereport contains aggregated metrics for one go package
 type PackageReport struct {
 	Path                 string  `json:"path"`
 	Score                float64 `json:"code_health_score"`
@@ -80,6 +86,7 @@ type PackageReport struct {
 	DependencyDepth      int     `json:"dependency_depth"`
 }
 
+// summary contains aggregate metrics for the analyzed repository
 type Summary struct {
 	GoFiles                int           `json:"go_files"`
 	SourceLines            int           `json:"source_lines"`
@@ -92,6 +99,7 @@ type Summary struct {
 	Health                 HealthMetrics `json:"health"`
 }
 
+// configuration records the analyzer options used for a report
 type Configuration struct {
 	IncludeTests          bool   `json:"include_tests"`
 	IncludeGitChurn       bool   `json:"include_git_churn"`
@@ -99,6 +107,7 @@ type Configuration struct {
 	DuplicationEngine     string `json:"duplication_engine"`
 }
 
+// report is the complete json-serializable analyzer result
 type Report struct {
 	SchemaVersion   string          `json:"schema_version"`
 	ScoringVersion  string          `json:"scoring_version"`
@@ -118,6 +127,7 @@ type Report struct {
 	Warnings        []string        `json:"warnings"`
 }
 
+// classification handles classification
 func classification(score float64) string {
 	switch {
 	case score >= 9:
@@ -133,24 +143,27 @@ func classification(score float64) string {
 	}
 }
 
+// writetext handles write text
 func writeText(w io.Writer, report Report) {
 	writeTextHeader(w, report)
 	writeTextWarnings(w, report)
 	writeTextHotspots(w, report)
 }
 
+// writetextheader handles write text header
 func writeTextHeader(w io.Writer, report Report) {
 	if report.CodeHealthScore == nil {
-		fmt.Fprintf(w, "Code Health: unavailable (%s)\n", report.AnalysisStatus)
+		_, _ = fmt.Fprintf(w, "Code Health: unavailable (%s)\n", report.AnalysisStatus)
 	} else {
-		fmt.Fprintf(w, "Go Code Health: %.1f/10 (%s)\n", *report.CodeHealthScore, report.Classification)
+		_, _ = fmt.Fprintf(w, "Go Code Health: %.1f/10 (%s)\n", *report.CodeHealthScore, report.Classification)
 	}
-	fmt.Fprintf(w, "Analyzed: %d files, %d functions, %d source lines | Score model: %s\n", report.Summary.GoFiles, report.Summary.Functions, report.Summary.SourceLines, report.ScoringVersion)
-	fmt.Fprintf(w, "Dimensions: Complexity %s | Structure %s | Duplication %s | Coupling %s\n",
+	_, _ = fmt.Fprintf(w, "Analyzed: %d files, %d functions, %d source lines | Score model: %s\n", report.Summary.GoFiles, report.Summary.Functions, report.Summary.SourceLines, report.ScoringVersion)
+	_, _ = fmt.Fprintf(w, "Dimensions: Complexity %s | Structure %s | Duplication %s | Coupling %s\n",
 		scoreLabel(report.Dimensions.Complexity), scoreLabel(report.Dimensions.Structure), scoreLabel(report.Dimensions.Duplication), scoreLabel(report.Dimensions.Coupling))
-	fmt.Fprintf(w, "Exact duplicate function tokens: %.1f%%\n", report.Summary.DuplicationPercent)
+	_, _ = fmt.Fprintf(w, "Exact duplicate function tokens: %.1f%%\n", report.Summary.DuplicationPercent)
 }
 
+// scorelabel handles score label
 func scoreLabel(value *float64) string {
 	if value == nil {
 		return "N/A"
@@ -158,18 +171,21 @@ func scoreLabel(value *float64) string {
 	return fmt.Sprintf("%.1f", *value)
 }
 
+// writetextwarnings handles write text warnings
 func writeTextWarnings(w io.Writer, report Report) {
 	for _, warning := range report.Warnings {
-		fmt.Fprintf(w, "Warning: %s\n", warning)
+		_, _ = fmt.Fprintf(w, "Warning: %s\n", warning)
 	}
 }
 
+// writefinding handles write finding
 func writeFinding(w io.Writer, finding Finding) {
-	fmt.Fprintf(w, "   - %s: %s\n", finding.Rule, finding.Message)
+	_, _ = fmt.Fprintf(w, "   - %s: %s\n", finding.Rule, finding.Message)
 }
 
+// writefilehotspot handles write file hotspot
 func writeFileHotspot(w io.Writer, index int, file FileReport) {
-	fmt.Fprintf(w, "%d. %.1f/10 %s\n", index+1, file.Score, file.Path)
+	_, _ = fmt.Fprintf(w, "%d. %.1f/10 %s\n", index+1, file.Score, file.Path)
 	count := len(file.Findings)
 	if count > 3 {
 		count = 3
@@ -179,34 +195,38 @@ func writeFileHotspot(w io.Writer, index int, file FileReport) {
 	}
 }
 
+// writetexthotspots handles write text hotspots
 func writeTextHotspots(w io.Writer, report Report) {
 	if len(report.Hotspots) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nFiles needing attention:")
+	_, _ = fmt.Fprintln(w, "\nFiles needing attention:")
 	for i, f := range report.Hotspots {
 		writeFileHotspot(w, i, f)
 	}
 }
 
+// main runs the command-line analyzer
 func main() {
 	os.Exit(run())
 }
 
+// runconfig contains command-line options for one analyzer run
 type RunConfig struct {
-	path              string
-	output            string
-	includeTests      bool
-	includeGitChurn   bool
-	failUnder         float64
-	workers           int
-	noCache           bool
-	cacheInfo         bool
-	cacheFile         string
-	explainHotspots   bool
-	hotspotsScope     string
+	path            string
+	output          string
+	includeTests    bool
+	includeGitChurn bool
+	failUnder       float64
+	workers         int
+	noCache         bool
+	cacheInfo       bool
+	cacheFile       string
+	explainHotspots bool
+	hotspotsScope   string
 }
 
+// parseflags handles parse flags
 func parseFlags() RunConfig {
 	path := flag.String("path", ".", "Go repository or directory to scan (read-only)")
 	output := flag.String("format", "json", "Output format: json or text")
@@ -236,6 +256,7 @@ func parseFlags() RunConfig {
 	}
 }
 
+// handlecacheinfo handles handle cache info
 func handleCacheInfo(cacheMgr *CacheManager) int {
 	cache, err := cacheMgr.ReadCache()
 	if err == nil && cache != nil {
@@ -246,6 +267,7 @@ func handleCacheInfo(cacheMgr *CacheManager) int {
 	return 0
 }
 
+// checkcachedreport handles check cached report
 func checkCachedReport(cacheMgr *CacheManager, cfg RunConfig, currentHash string) (Report, bool) {
 	if cfg.noCache {
 		return Report{}, false
@@ -263,6 +285,7 @@ func checkCachedReport(cacheMgr *CacheManager, cfg RunConfig, currentHash string
 	return *cached.Report, true
 }
 
+// generateexplanations handles generate explanations
 func generateExplanations(report *Report, cfg RunConfig) {
 	if !cfg.explainHotspots {
 		return
@@ -276,6 +299,7 @@ func generateExplanations(report *Report, cfg RunConfig) {
 	fmt.Fprintf(os.Stderr, "\n%s\n", explanations)
 }
 
+// checkfailunder handles check fail under
 func checkFailUnder(report Report, failUnder float64) int {
 	if failUnder >= 0 && report.CodeHealthScore != nil && *report.CodeHealthScore < failUnder {
 		return 3
@@ -283,6 +307,20 @@ func checkFailUnder(report Report, failUnder float64) int {
 	return 0
 }
 
+// emitcompletedreport handles emit completed report
+func emitCompletedReport(report Report, cfg RunConfig) int {
+	generateExplanations(&report, cfg)
+	if emitErr := emitReport(cfg.output, report); emitErr != nil {
+		fmt.Fprintln(os.Stderr, emitErr)
+		return 2
+	}
+	if report.AnalysisStatus != "complete" {
+		return 2
+	}
+	return checkFailUnder(report, cfg.failUnder)
+}
+
+// detectchangedfiles handles detect changed files
 func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[string]bool) {
 	if cfg.noCache {
 		return nil, nil
@@ -307,6 +345,7 @@ func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[
 	return cached, changedFiles
 }
 
+// performanalysis handles perform analysis
 func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
 	start := time.Now()
 
@@ -336,6 +375,7 @@ func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
 	return report, nil
 }
 
+// run handles run
 func run() int {
 	cfg := parseFlags()
 
@@ -358,15 +398,7 @@ func run() int {
 
 	report, found := checkCachedReport(cacheMgr, cfg, currentHash)
 	if found {
-		generateExplanations(&report, cfg)
-		if emitErr := emitReport(cfg.output, report); emitErr != nil {
-			fmt.Fprintln(os.Stderr, emitErr)
-			return 2
-		}
-		if report.AnalysisStatus != "complete" {
-			return 2
-		}
-		return checkFailUnder(report, cfg.failUnder)
+		return emitCompletedReport(report, cfg)
 	}
 
 	report, err = performAnalysis(cacheMgr, cfg)
@@ -375,36 +407,58 @@ func run() int {
 		return 2
 	}
 
-	generateExplanations(&report, cfg)
-
-	if emitErr := emitReport(cfg.output, report); emitErr != nil {
-		fmt.Fprintln(os.Stderr, emitErr)
-		return 2
-	}
-
-	if report.AnalysisStatus != "complete" {
-		return 2
-	}
-
-	return checkFailUnder(report, cfg.failUnder)
+	return emitCompletedReport(report, cfg)
 }
 
+// validateflags handles validate flags
 func validateFlags(output string, failUnder float64, workers int, hotspotsScope string) error {
+	validators := []func() error{
+		func() error { return validateOutput(output) },
+		func() error { return validateFailUnder(failUnder) },
+		func() error { return validateWorkers(workers) },
+		func() error { return validateHotspotsScope(hotspotsScope) },
+	}
+	for _, validate := range validators {
+		if err := validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateoutput handles validate output
+func validateOutput(output string) error {
 	if output != "json" && output != "text" {
 		return errors.New("invalid --format: expected json or text")
 	}
+	return nil
+}
+
+// validatefailunder handles validate fail under
+func validateFailUnder(failUnder float64) error {
 	if failUnder > 10 || (failUnder < 0 && failUnder != -1) {
 		return errors.New("invalid --fail-under: expected 0-10")
 	}
+	return nil
+}
+
+// validateworkers handles validate workers
+func validateWorkers(workers int) error {
 	if workers < 1 || workers > 256 {
 		return errors.New("invalid --workers: expected 1-256")
 	}
-	if hotspotsScope != "file" && hotspotsScope != "package" {
+	return nil
+}
+
+// validatehotspotsscope handles validate hotspots scope
+func validateHotspotsScope(scope string) error {
+	if scope != "file" && scope != "package" {
 		return errors.New("invalid --hotspots-scope: expected file or package")
 	}
 	return nil
 }
 
+// emitreport handles emit report
 func emitReport(output string, report Report) error {
 	if output == "text" {
 		writeText(os.Stdout, report)
@@ -418,6 +472,7 @@ func emitReport(output string, report Report) error {
 	return nil
 }
 
+// tophotspots handles top hotspots
 func topHotspots(files []FileReport) []FileReport {
 	matches := make([]FileReport, 0)
 	for _, f := range files {

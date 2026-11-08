@@ -35,6 +35,7 @@ func TestDuplicationConfigurationAndReportParsing(t *testing.T) {
 		t.Fatalf("unexpected jscpd summary: %+v", summary)
 	}
 }
+
 func TestJSCPDExecutionAndSourceMapping(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "jscpd")
@@ -74,6 +75,7 @@ printf '%s' '{"statistics":{"total":{"tokens":20,"duplicatedTokens":4,"percentag
 		t.Fatalf("fake jscpd should be discoverable: %v", err)
 	}
 }
+
 func TestJSCPDErrors(t *testing.T) {
 	root := t.TempDir()
 	if err := detectWithJSCPDRS(root, nil, &Summary{}); err == nil {

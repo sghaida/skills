@@ -2,16 +2,19 @@ package main
 
 import "strings"
 
+// withinmodule handles within module
 func withinModule(imp, module string) bool {
 	return module != "" && strings.HasPrefix(imp, module+"/")
 }
 
+// packagehealth represents package health data
 type packageHealth struct {
 	incoming int
 	depth    int
 	cycle    bool
 }
 
+// analyzepackagegraph handles analyze package graph
 func analyzePackageGraph(files []*sourceFile, module string) map[string]packageHealth {
 	edges := map[string]map[string]bool{}
 	for _, file := range files {
@@ -31,6 +34,7 @@ func analyzePackageGraph(files []*sourceFile, module string) map[string]packageH
 	return health
 }
 
+// initializepackagehealth handles initialize package health
 func initializePackageHealth(edges map[string]map[string]bool) map[string]packageHealth {
 	health := map[string]packageHealth{}
 	for packagePath := range edges {
@@ -39,6 +43,7 @@ func initializePackageHealth(edges map[string]map[string]bool) map[string]packag
 	return health
 }
 
+// recordincomingdependencies handles record incoming dependencies
 func recordIncomingDependencies(edges map[string]map[string]bool, health map[string]packageHealth) {
 	for _, targets := range edges {
 		for target := range targets {
@@ -49,6 +54,7 @@ func recordIncomingDependencies(edges map[string]map[string]bool, health map[str
 	}
 }
 
+// calculatepackagedepths handles calculate package depths
 func calculatePackageDepths(edges map[string]map[string]bool, health map[string]packageHealth) {
 	state := map[string]int{}
 	var visit func(string, []string) int
@@ -76,6 +82,7 @@ func calculatePackageDepths(edges map[string]map[string]bool, health map[string]
 	}
 }
 
+// markpackagecycle handles mark package cycle
 func markPackageCycle(stack []string, health map[string]packageHealth) {
 	for _, name := range stack {
 		value := health[name]
@@ -84,19 +91,43 @@ func markPackageCycle(stack []string, health map[string]packageHealth) {
 	}
 }
 
+// assignpackagedependencies handles assign package dependencies
 func assignPackageDependencies(files []*sourceFile, module string) {
 	deps := map[string]map[string]bool{}
+	initializePackageDependencies(files, deps)
+	recordPackageDependencies(files, module, deps)
+	assignPackageFanOut(files, deps)
+}
+
+// initializepackagedependencies handles initialize package dependencies
+func initializePackageDependencies(files []*sourceFile, deps map[string]map[string]bool) {
 	for _, file := range files {
 		if deps[file.packagePath] == nil {
 			deps[file.packagePath] = map[string]bool{}
 		}
+	}
+}
+
+// recordpackagedependencies handles record package dependencies
+func recordPackageDependencies(files []*sourceFile, module string, deps map[string]map[string]bool) {
+	for _, file := range files {
 		for _, imp := range file.imports {
-			if withinModule(imp, module) {
-				deps[file.packagePath][imp] = true
-				file.internalImports++
-			}
+			recordPackageImport(file, module, imp, deps)
 		}
 	}
+}
+
+// recordpackageimport handles record package import
+func recordPackageImport(file *sourceFile, module, imp string, deps map[string]map[string]bool) {
+	if !withinModule(imp, module) {
+		return
+	}
+	deps[file.packagePath][imp] = true
+	file.internalImports++
+}
+
+// assignpackagefanout handles assign package fan out
+func assignPackageFanOut(files []*sourceFile, deps map[string]map[string]bool) {
 	for _, file := range files {
 		file.packageFanOut = len(deps[file.packagePath])
 	}

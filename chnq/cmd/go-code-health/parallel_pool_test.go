@@ -52,7 +52,7 @@ func TestWorkerPoolProcessing(t *testing.T) {
 	pool := NewWorkerPool(2)
 
 	// Mock analyze function
-	analyzeFunc := func(ctx context.Context, filePath string) (*FileReport, error) {
+	analyzeFunc := func(_ context.Context, filePath string) (*FileReport, error) {
 		return &FileReport{
 			Path:  filePath,
 			Score: 8.5,
@@ -107,7 +107,7 @@ func TestWorkerPoolProcessing(t *testing.T) {
 func TestWorkerPoolError(t *testing.T) {
 	pool := NewWorkerPool(1)
 
-	analyzeFunc := func(ctx context.Context, filePath string) (*FileReport, error) {
+	analyzeFunc := func(_ context.Context, filePath string) (*FileReport, error) {
 		if strings.Contains(filePath, "error") {
 			return nil, errors.New("test error")
 		}
@@ -159,10 +159,10 @@ func TestWorkerPoolError(t *testing.T) {
 }
 
 // TestWorkerPoolContextCancellation tests that pool respects context cancellation
-func TestWorkerPoolContextCancellation(t *testing.T) {
+func TestWorkerPoolContextCancellation(_ *testing.T) {
 	pool := NewWorkerPool(1)
 
-	analyzeFunc := func(ctx context.Context, filePath string) (*FileReport, error) {
+	analyzeFunc := func(ctx context.Context, _ string) (*FileReport, error) {
 		// Simulate work that checks context
 		select {
 		case <-ctx.Done():

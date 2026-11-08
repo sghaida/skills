@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// HotspotsExplainer generates detailed explanations for hotspots
+// hotspotsexplainer generates detailed explanations for hotspots
 type HotspotsExplainer struct {
 	report *Report
 	scope  string // "file" or "package"
 }
 
-// Explanation represents a hotspot explanation
+// explanation represents a hotspot explanation
 type Explanation struct {
 	Path                 string
 	OverallScore         float64
@@ -25,7 +25,7 @@ type Explanation struct {
 	BehaviorToPreserve   string
 }
 
-// NewHotspotsExplainer creates a new explainer
+// newhotspotsexplainer creates a new explainer
 func NewHotspotsExplainer(report *Report, scope string) *HotspotsExplainer {
 	return &HotspotsExplainer{
 		report: report,
@@ -33,14 +33,14 @@ func NewHotspotsExplainer(report *Report, scope string) *HotspotsExplainer {
 	}
 }
 
-// GenerateExplanations generates markdown explanations for all hotspots
+// generateexplanations generates markdown explanations for all hotspots
 func (he *HotspotsExplainer) GenerateExplanations() (string, error) {
 	var sb strings.Builder
 	hotspots := he.scopedHotspots()
 
 	// Write header
 	sb.WriteString("## Hotspot Summary\n\n")
-	sb.WriteString(fmt.Sprintf("Based on the last complete scan, model `%s`.\n\n", he.report.ScoringVersion))
+	_, _ = fmt.Fprintf(&sb, "Based on the last complete scan, model `%s`.\n\n", he.report.ScoringVersion)
 
 	// Write summary table
 	he.writeSummaryTable(&sb, hotspots)
@@ -56,7 +56,7 @@ func (he *HotspotsExplainer) GenerateExplanations() (string, error) {
 			continue
 		}
 
-		sb.WriteString(fmt.Sprintf("## %d. %s — %.1f/10\n\n", i+1, strings.TrimSuffix(hotspot.Path, ".go"), hotspot.Score))
+		_, _ = fmt.Fprintf(&sb, "## %d. %s — %.1f/10\n\n", i+1, strings.TrimSuffix(hotspot.Path, ".go"), hotspot.Score)
 
 		// Measured findings
 		sb.WriteString("### Measured findings\n\n")
@@ -82,7 +82,7 @@ func (he *HotspotsExplainer) GenerateExplanations() (string, error) {
 	return sb.String(), nil
 }
 
-// explainHotspot creates detailed explanation for one hotspot
+// explainhotspot creates detailed explanation for one hotspot
 func (he *HotspotsExplainer) findLongestFunction(hotspot *FileReport) (string, int) {
 	maxLen := 0
 	maxName := ""
@@ -95,64 +95,82 @@ func (he *HotspotsExplainer) findLongestFunction(hotspot *FileReport) (string, i
 	return maxName, maxLen
 }
 
+// buildmeasuredfindings handles build measured findings
 func (he *HotspotsExplainer) buildMeasuredFindings(hotspot *FileReport) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("- **%d-line file**", hotspot.Lines))
-	if len(hotspot.Functions) > 0 {
-		sb.WriteString(fmt.Sprintf(" with %d functions", len(hotspot.Functions)))
-	}
-	sb.WriteString(".\n")
-
-	maxName, maxLen := he.findLongestFunction(hotspot)
-	if maxName != "" {
-		sb.WriteString(fmt.Sprintf("- **%s function**: %d lines", maxName, maxLen))
-		if len(hotspot.Functions) > 0 && hotspot.Functions[0].BranchingComplexity > 0 {
-			sb.WriteString(fmt.Sprintf(" with branching complexity of **%d**", hotspot.Functions[0].BranchingComplexity))
-		}
-		sb.WriteString(".\n")
-	}
-
-	if len(hotspot.Functions) > 0 && hotspot.Functions[0].MaxNesting > 0 {
-		sb.WriteString(fmt.Sprintf("- Maximum nesting: **%d**.\n", hotspot.Functions[0].MaxNesting))
-	}
-
-	if hotspot.DuplicationPercent > 0 {
-		sb.WriteString(fmt.Sprintf("- **%.1f%% duplicated** tokens: %d of %d.\n",
-			hotspot.DuplicationPercent, hotspot.DuplicateTokens, hotspot.TotalFunctionTokens))
-	}
-
-	if hotspot.InternalImports > 0 {
-		sb.WriteString(fmt.Sprintf("- Enclosing package imports **%d internal packages**.\n", hotspot.InternalImports))
-	}
-
+	writeFileFinding(&sb, hotspot)
+	writeFunctionFinding(&sb, hotspot)
+	writeNestingFinding(&sb, hotspot)
+	writeDuplicationFinding(&sb, hotspot)
+	writeImportFinding(&sb, hotspot)
 	return sb.String()
 }
 
+// writefilefinding handles write file finding
+func writeFileFinding(sb *strings.Builder, hotspot *FileReport) {
+	_, _ = fmt.Fprintf(sb, "- **%d-line file**", hotspot.Lines)
+	if len(hotspot.Functions) > 0 {
+		_, _ = fmt.Fprintf(sb, " with %d functions", len(hotspot.Functions))
+	}
+	sb.WriteString(".\n")
+}
+
+// writefunctionfinding handles write function finding
+func writeFunctionFinding(sb *strings.Builder, hotspot *FileReport) {
+	maxName, maxLen := (&HotspotsExplainer{}).findLongestFunction(hotspot)
+	if maxName == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(sb, "- **%s function**: %d lines", maxName, maxLen)
+	if len(hotspot.Functions) > 0 && hotspot.Functions[0].BranchingComplexity > 0 {
+		_, _ = fmt.Fprintf(sb, " with branching complexity of **%d**", hotspot.Functions[0].BranchingComplexity)
+	}
+	sb.WriteString(".\n")
+}
+
+// writenestingfinding handles write nesting finding
+func writeNestingFinding(sb *strings.Builder, hotspot *FileReport) {
+	if len(hotspot.Functions) > 0 && hotspot.Functions[0].MaxNesting > 0 {
+		_, _ = fmt.Fprintf(sb, "- Maximum nesting: **%d**.\n", hotspot.Functions[0].MaxNesting)
+	}
+}
+
+// writeduplicationfinding handles write duplication finding
+func writeDuplicationFinding(sb *strings.Builder, hotspot *FileReport) {
+	if hotspot.DuplicationPercent > 0 {
+		_, _ = fmt.Fprintf(sb, "- **%.1f%% duplicated** tokens: %d of %d.\n",
+			hotspot.DuplicationPercent, hotspot.DuplicateTokens, hotspot.TotalFunctionTokens)
+	}
+}
+
+// writeimportfinding handles write import finding
+func writeImportFinding(sb *strings.Builder, hotspot *FileReport) {
+	if hotspot.InternalImports > 0 {
+		_, _ = fmt.Fprintf(sb, "- Enclosing package imports **%d internal packages**.\n", hotspot.InternalImports)
+	}
+}
+
+// buildwhyscorepoorly handles build why score poorly
 func (he *HotspotsExplainer) buildWhyScorePoorly(hotspot *FileReport) string {
 	var sb strings.Builder
 	sb.WriteString("The code has multiple concerns:\n\n")
 
-	complexity := hotspot.Dimensions.Complexity
-	structure := hotspot.Dimensions.Structure
-	duplication := hotspot.Dimensions.Duplication
-	coupling := hotspot.Dimensions.Coupling
-
-	if complexity != nil && *complexity < 5 {
-		sb.WriteString(fmt.Sprintf("- **Complexity** (%.1f/10): Too many branches or long sequential logic\n", *complexity))
-	}
-	if structure != nil && *structure < 5 {
-		sb.WriteString(fmt.Sprintf("- **Structure** (%.1f/10): Function size or deep nesting\n", *structure))
-	}
-	if duplication != nil && *duplication < 5 {
-		sb.WriteString(fmt.Sprintf("- **Duplication** (%.1f/10): Repeated logic patterns\n", *duplication))
-	}
-	if coupling != nil && *coupling < 5 {
-		sb.WriteString(fmt.Sprintf("- **Coupling** (%.1f/10): Too many dependencies\n", *coupling))
-	}
+	appendDimensionConcern(&sb, "Complexity", hotspot.Dimensions.Complexity, "Too many branches or long sequential logic")
+	appendDimensionConcern(&sb, "Structure", hotspot.Dimensions.Structure, "Function size or deep nesting")
+	appendDimensionConcern(&sb, "Duplication", hotspot.Dimensions.Duplication, "Repeated logic patterns")
+	appendDimensionConcern(&sb, "Coupling", hotspot.Dimensions.Coupling, "Too many dependencies")
 
 	return sb.String()
 }
 
+// appenddimensionconcern handles append dimension concern
+func appendDimensionConcern(sb *strings.Builder, name string, score *float64, message string) {
+	if score != nil && *score < 5 {
+		_, _ = fmt.Fprintf(sb, "- **%s** (%.1f/10): %s\n", name, *score, message)
+	}
+}
+
+// buildbehaviortopreserve handles build behavior to preserve
 func (he *HotspotsExplainer) buildBehaviorToPreserve(path string) string {
 	if he.scope == "package" {
 		return "- Preserve behavior across the package files represented by this hotspot.\n"
@@ -160,12 +178,13 @@ func (he *HotspotsExplainer) buildBehaviorToPreserve(path string) string {
 	return he.extractBehaviorPatterns(path)
 }
 
+// explainhotspot handles explain hotspot
 func (he *HotspotsExplainer) explainHotspot(hotspot *FileReport) (*Explanation, error) {
 	exp := &Explanation{
-		Path:                 hotspot.Path,
-		OverallScore:         hotspot.Score,
-		MeasuredFindings:     he.buildMeasuredFindings(hotspot),
-		WhyScorePoorly:       he.buildWhyScorePoorly(hotspot),
+		Path:             hotspot.Path,
+		OverallScore:     hotspot.Score,
+		MeasuredFindings: he.buildMeasuredFindings(hotspot),
+		WhyScorePoorly:   he.buildWhyScorePoorly(hotspot),
 		SuggestedImprovement: "Extract focused, testable functions for each concern. " +
 			"Separate data transformation from side effects (logging, I/O). " +
 			"Reduce nesting by extracting conditional blocks. " +
@@ -176,13 +195,13 @@ func (he *HotspotsExplainer) explainHotspot(hotspot *FileReport) (*Explanation, 
 	return exp, nil
 }
 
-// extractBehaviorPatterns extracts critical behavior from source code
+// extractbehaviorpatterns extracts critical behavior from source code
 func (he *HotspotsExplainer) extractBehaviorPatterns(filePath string) string {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "- Unable to extract behavior patterns (file not accessible)\n"
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var patterns strings.Builder
 	patterns.WriteString("- Error handling: Preserve error types and wrapping\n")
@@ -192,7 +211,7 @@ func (he *HotspotsExplainer) extractBehaviorPatterns(filePath string) string {
 
 	// Scan for specific patterns (regex)
 	scanner := bufio.NewScanner(file)
-	patterns_found := make(map[string]bool)
+	patternsFound := make(map[string]bool)
 
 	statusCodeRx := regexp.MustCompile(`(?i)(http\.)?status(code)?.*\d{3}`)
 	contextErrRx := regexp.MustCompile(`ctx\.Err\(\)`)
@@ -200,24 +219,26 @@ func (he *HotspotsExplainer) extractBehaviorPatterns(filePath string) string {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if statusCodeRx.MatchString(line) && !patterns_found["status"] {
-			patterns.WriteString("- HTTP status codes: Different 4xx/5xx mappings per error type\n")
-			patterns_found["status"] = true
-		}
-		if contextErrRx.MatchString(line) && !patterns_found["context"] {
-			patterns.WriteString("- Context handling: Cancellation signals should be respected\n")
-			patterns_found["context"] = true
-		}
-		if errorTypeRx.MatchString(line) && !patterns_found["errors"] {
-			patterns.WriteString("- Error classification: Type assertions and special cases\n")
-			patterns_found["errors"] = true
-		}
+		appendDetectedPattern(&patterns, patternsFound, line, "status", statusCodeRx,
+			"- HTTP status codes: Different 4xx/5xx mappings per error type\n")
+		appendDetectedPattern(&patterns, patternsFound, line, "context", contextErrRx,
+			"- Context handling: Cancellation signals should be respected\n")
+		appendDetectedPattern(&patterns, patternsFound, line, "errors", errorTypeRx,
+			"- Error classification: Type assertions and special cases\n")
 	}
 
 	return patterns.String()
 }
 
-// writeSummaryTable writes the hotspots summary table
+// appenddetectedpattern handles append detected pattern
+func appendDetectedPattern(patterns *strings.Builder, found map[string]bool, line, key string, pattern *regexp.Regexp, message string) {
+	if pattern.MatchString(line) && !found[key] {
+		patterns.WriteString(message)
+		found[key] = true
+	}
+}
+
+// writesummarytable writes the hotspots summary table
 func (he *HotspotsExplainer) writeSummaryTable(sb *strings.Builder, hotspots []FileReport) {
 	if len(hotspots) == 0 {
 		return
@@ -227,23 +248,25 @@ func (he *HotspotsExplainer) writeSummaryTable(sb *strings.Builder, hotspots []F
 	sb.WriteString("|---------|---------|------------|-----------|-------------|----------|\n")
 
 	for _, h := range hotspots {
-		sb.WriteString(fmt.Sprintf("| %s | **%.1f** | %.1f | %.1f | %.1f | %.1f |\n",
+		_, _ = fmt.Fprintf(sb, "| %s | **%.1f** | %.1f | %.1f | %.1f | %.1f |\n",
 			h.Path,
 			h.Score,
 			getFloatValue(h.Dimensions.Complexity),
 			getFloatValue(h.Dimensions.Structure),
 			getFloatValue(h.Dimensions.Duplication),
 			getFloatValue(h.Dimensions.Coupling),
-		))
+		)
 	}
 	sb.WriteString("\n")
 }
 
+// scopedhotspots handles scoped hotspots
 func (he *HotspotsExplainer) scopedHotspots() []FileReport {
 	if he.scope != "package" {
 		return he.report.Hotspots
 	}
 
+	// aggregate represents aggregate data
 	type aggregate struct {
 		report FileReport
 		count  int
@@ -292,6 +315,7 @@ func (he *HotspotsExplainer) scopedHotspots() []FileReport {
 	return result
 }
 
+// averagedimensions handles average dimensions
 func averageDimensions(current, next Dimensions, count int) Dimensions {
 	average := func(a, b *float64) *float64 {
 		if a == nil {
@@ -311,7 +335,7 @@ func averageDimensions(current, next Dimensions, count int) Dimensions {
 	}
 }
 
-// getFloatValue returns float value or 0 if nil
+// getfloatvalue returns float value or 0 if nil
 func getFloatValue(val *float64) float64 {
 	if val == nil {
 		return 0

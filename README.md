@@ -1,3 +1,7 @@
+<!-- markdownlint-disable MD013 MD041 -->
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/58254c68d00b4e268740898031ca76fb)](https://app.codacy.com/gh/sghaida/skills/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+<!-- markdownlint-enable MD013 MD041 -->
+
 # Skills
 
 This repository contains reusable agent skills that extend coding agents with
@@ -377,3 +381,40 @@ skills/
 `chnq` is an initial model and is not yet calibrated against independent human
 reviews of real Go code. Before using the score for PR blocking across teams,
 validate thresholds against varied Go services and manually rated examples.
+
+### Developer dependencies
+
+The development workflow requires Go 1.27.3 and the latest
+`golangci-lint` v2 CLI. The Makefile installs `golangci-lint` automatically
+when running the lint target:
+
+```sh
+make install-golangci-lint
+make precheck
+```
+
+`make precheck` runs formatting, module tidy, tests, `go vet`, and
+`golangci-lint` using the repository configuration in
+[`.golangci.yml](./.golangci.yml). Install the repository-managed pre-commit
+hook to run the same checks before every commit:
+
+```sh
+make install-hooks
+```
+
+### Contributing
+
+Contributions should be focused, preserve the analyzer's deterministic
+read-only behavior, and include tests for behavior changes. Before submitting
+a change:
+
+```sh
+make install-hooks
+make precheck
+make build
+```
+
+Keep generated build output, local caches, editor settings, and profiling
+artifacts out of commits. Update the relevant skill documentation when
+changing its behavior, and describe the validation performed in the pull
+request.

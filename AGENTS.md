@@ -28,7 +28,18 @@ The default Go project directory is `chnq`. Override it with
 - Follow [Effective Go](https://go.dev/doc/effective_go) and
   [Uber's Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)
   for all Go development.
-- Run `make test` and `make vet` after Go changes.
+- Add a short, readable comment for every function, struct, and type
+  declaration, including unexported declarations.
+- Keep declaration comments lowercase and concise; do not end them with a
+  period or dash.
+- Every Go iteration must run formatting, tests, vet, and lint:
+  `make fmt`, `go mod tidy`, `go test ./...`, `go vet ./...`, and `make lint`.
+- Use the latest `golangci-lint` CLI for linting, installed with
+  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`;
+  verify the executable is available before linting.
+- Keep lint settings in the root [.golangci.yml](.golangci.yml) file.
+- Maintain at least 90% project code coverage.
+- Every Go source file must have a corresponding test file.
 - Keep the module path in `chnq/go.mod` consistent with package imports.
 - Do not commit generated files from `chnq/.build/`.
 

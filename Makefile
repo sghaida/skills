@@ -3,6 +3,8 @@
 SHELL := /bin/sh
 
 GO ?= go
+GOLANGCI_LINT ?= $(shell "$(GO)" env GOPATH)/bin/golangci-lint
+GOLANGCI_LINT_CONFIG ?= $(ROOT)/.golangci.yml
 NPM ?= npm
 NPM_PREFIX ?= $(HOME)/.local
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -12,10 +14,11 @@ BIN := $(BUILD_DIR)/go-code-health
 TARGET ?= $(PROJECT_DIR)
 FORMAT ?= json
 ARGS ?=
+-include $(ROOT)/.golint.config
 CLAUDE_SKILLS_DIR ?= $(HOME)/.claude/skills
 CLAUDE_SKILL_DIR := $(CLAUDE_SKILLS_DIR)/go-code-health
 
-.PHONY: help deps install-deps build run cmd test test-cover coverage vet install-claude install-codex install-github install-jscpd-rs clean
+.PHONY: help deps install-deps build run cmd fmt tidy test test-cover coverage vet install-golangci-lint lint precheck install-hooks install-claude install-codex install-github install-jscpd-rs clean
 
 help:
 	@printf '%s\n' \
@@ -24,10 +27,15 @@ help:
 	  'make build            Build chnq/.build/go-code-health' \
 	  'make run              Build and run scanner (TARGET=chnq FORMAT=json ARGS="")' \
 	  'make cmd              Run scanner using go run (without saving a binary)' \
+	  'make fmt              Format all Go source files' \
+	  'make tidy             Run go mod tidy' \
 	  'make test             Run all Go tests' \
 	  'make test-cover       Run tests and report production-file coverage' \
 	  'make coverage         Run tests and require 90% coverage per Go source file' \
 	  'make vet              Run go vet' \
+	  'make precheck         Run formatting, tidy, tests, vet, and lint' \
+	  'make lint             Install latest golangci-lint and run it' \
+	  'make install-hooks    Configure the repository pre-commit hook' \
 	  'make install-claude   Install the skill to ~/.claude/skills/go-code-health' \
 	  'make install-codex    Install the skill to ~/.agents/skills/go-code-health' \
 	  'make install-github   Install the skill to .github/skills/go-code-health' \
@@ -46,6 +54,7 @@ help:
 
 deps:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) mod download
+	@"$(MAKE)" install-golangci-lint
 	@if [ -f "$(ROOT)/.go-code-health.json" ] && \
 	  grep -Eq '"duplication_engine"[[:space:]]*:[[:space:]]*"jscpd-rs"' "$(ROOT)/.go-code-health.json"; then \
 	  "$(MAKE)" install-jscpd-rs; \
@@ -65,6 +74,12 @@ run: build
 cmd:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) run ./cmd/go-code-health --path "$(TARGET)" --format "$(FORMAT)" $(ARGS)
 
+fmt:
+	@find "$(PROJECT_DIR)" -type f -name '*.go' -not -path '*/.build/*' -print0 | xargs -0 gofmt -w
+
+tidy:
+	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) mod tidy
+
 test:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) test ./...
 
@@ -79,6 +94,19 @@ coverage: test-cover
 
 vet:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) vet ./...
+
+install-golangci-lint:
+	@GOWORK=off GOTOOLCHAIN=go1.27.3+auto "$(GO)" install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	@test -x "$(GOLANGCI_LINT)" || { printf 'golangci-lint was not installed at %s\n' "$(GOLANGCI_LINT)" >&2; exit 2; }
+
+lint: install-golangci-lint
+	@cd "$(PROJECT_DIR)" && GOWORK=off "$(GOLANGCI_LINT)" run --config "$(GOLANGCI_LINT_CONFIG)" ./...
+
+precheck: fmt tidy test vet lint
+
+install-hooks:
+	@git -C "$(ROOT)" config core.hooksPath .githooks
+	@printf 'Configured Git hooks path: .githooks\n'
 
 # Copy source only, never compiled binaries or local caches. Destination is configurable
 # so this can install to either the user or project Claude Code skills directory.

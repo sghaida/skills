@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// CacheFile represents the cached analysis result
+// cachefile represents the cached analysis result
 type CacheFile struct {
 	Version              string                 `json:"version"`
 	ScanTimestamp        string                 `json:"scan_timestamp"`
@@ -22,13 +22,13 @@ type CacheFile struct {
 	ScanDurationMs       int64                  `json:"scan_duration_ms"`
 }
 
-// CacheManager handles cache read/write operations
+// cachemanager handles cache read/write operations
 type CacheManager struct {
 	cacheFile string
 	version   string
 }
 
-// NewCacheManager creates a new cache manager
+// newcachemanager creates a new cache manager
 func NewCacheManager(cacheFile, version string) *CacheManager {
 	if cacheFile == "" {
 		cacheFile = ".chnq-health-status"
@@ -39,27 +39,12 @@ func NewCacheManager(cacheFile, version string) *CacheManager {
 	}
 }
 
-// ComputeRepositoryHash computes SHA256 hash of all .go files in a directory
+// computerepositoryhash computes sha256 hash of all .go files in a directory
 func (cm *CacheManager) ComputeRepositoryHash(rootPath string) (string, error) {
 	h := sha256.New()
 
 	// Walk directory and hash all .go files
-	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors, continue walking
-		}
-		if !info.IsDir() && filepath.Ext(path) == ".go" && !isBuildArtifact(path) {
-			file, err := os.Open(path)
-			if err != nil {
-				return nil // Skip unreadable files
-			}
-			defer file.Close()
-			if _, err := io.Copy(h, file); err != nil {
-				return nil
-			}
-		}
-		return nil
-	})
+	err := filepath.Walk(rootPath, hashWalkEntry(h))
 
 	if err != nil {
 		return "", err
@@ -68,7 +53,23 @@ func (cm *CacheManager) ComputeRepositoryHash(rootPath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// isBuildArtifact returns true if path should be excluded from hashing
+// hashwalkentry reports whether hash walk entry
+func hashWalkEntry(hash io.Writer) filepath.WalkFunc {
+	return func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".go" || isBuildArtifact(path) {
+			return nil
+		}
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			return nil
+		}
+		defer func() { _ = file.Close() }()
+		_, _ = io.Copy(hash, file)
+		return nil
+	}
+}
+
+// isbuildartifact returns true if path should be excluded from hashing
 func isBuildArtifact(path string) bool {
 	excludeDirs := []string{".build", "node_modules", ".git"}
 	for _, dir := range excludeDirs {
@@ -80,13 +81,13 @@ func isBuildArtifact(path string) bool {
 	return false
 }
 
-// ComputeFileHash computes SHA256 hash of a single file
+// computefilehash computes sha256 hash of a single file
 func (cm *CacheManager) ComputeFileHash(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, file); err != nil {
@@ -96,7 +97,7 @@ func (cm *CacheManager) ComputeFileHash(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// ReadCache reads the cache file from disk
+// readcache reads the cache file from disk
 func (cm *CacheManager) ReadCache() (*CacheFile, error) {
 	data, err := os.ReadFile(cm.cacheFile)
 	if err != nil {
@@ -111,7 +112,7 @@ func (cm *CacheManager) ReadCache() (*CacheFile, error) {
 	return &cache, nil
 }
 
-// WriteCache writes the cache file to disk atomically
+// writecache writes the cache file to disk atomically
 func (cm *CacheManager) WriteCache(report *Report, codeHash string, scanDurationMs int64, roots ...string) error {
 	cache := &CacheFile{
 		Version:        cm.version,
@@ -122,17 +123,7 @@ func (cm *CacheManager) WriteCache(report *Report, codeHash string, scanDuration
 		ScanDurationMs: scanDurationMs,
 	}
 
-	// Compute per-file hashes
-	for _, file := range report.Files {
-		filePath := file.Path
-		if len(roots) > 0 && roots[0] != "" {
-			filePath = filepath.Join(roots[0], filepath.FromSlash(file.Path))
-		}
-		hash, err := cm.ComputeFileHash(filePath)
-		if err == nil {
-			cache.FilesHashMap[file.Path] = hash
-		}
-	}
+	cm.populateFileHashes(cache, report.Files, roots)
 
 	// Marshal to JSON
 	data, err := json.MarshalIndent(cache, "", "  ")
@@ -142,19 +133,33 @@ func (cm *CacheManager) WriteCache(report *Report, codeHash string, scanDuration
 
 	// Atomic write: write to temp file, then rename
 	tmpFile := cm.cacheFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
 		return err
 	}
 
 	if err := os.Rename(tmpFile, cm.cacheFile); err != nil {
-		os.Remove(tmpFile)
+		_ = os.Remove(tmpFile)
 		return err
 	}
 
 	return nil
 }
 
-// ValidateCache checks if cache is valid
+// populatefilehashes handles populate file hashes
+func (cm *CacheManager) populateFileHashes(cache *CacheFile, files []FileReport, roots []string) {
+	for _, file := range files {
+		filePath := file.Path
+		if len(roots) > 0 && roots[0] != "" {
+			filePath = filepath.Join(roots[0], filepath.FromSlash(file.Path))
+		}
+		hash, err := cm.ComputeFileHash(filePath)
+		if err == nil {
+			cache.FilesHashMap[file.Path] = hash
+		}
+	}
+}
+
+// validatecache checks if cache is valid
 func (cm *CacheManager) ValidateCache(currentCodeHash string) (bool, error) {
 	cache, err := cm.ReadCache()
 	if err != nil {
@@ -174,8 +179,8 @@ func (cm *CacheManager) ValidateCache(currentCodeHash string) (bool, error) {
 	return true, nil
 }
 
-// ComputeFilesHashMap computes hashes for all files at root path
-func (cm *CacheManager) ComputeFilesHashMap(rootPath string, files []string) map[string]string {
+// computefileshashmap computes hashes for all files at root path
+func (cm *CacheManager) ComputeFilesHashMap(_ string, files []string) map[string]string {
 	hashes := make(map[string]string)
 	for _, file := range files {
 		hash, err := cm.ComputeFileHash(file)
@@ -187,7 +192,7 @@ func (cm *CacheManager) ComputeFilesHashMap(rootPath string, files []string) map
 }
 
 // ComputeRepositoryFileHashes returns per-file hashes using the same relative
-// paths that reports use, allowing changed files to be rescanned selectively.
+// paths that reports use, allowing changed files to be rescanned selectively
 func (cm *CacheManager) ComputeRepositoryFileHashes(rootPath string, includeTests bool) (map[string]string, error) {
 	root, err := filepath.Abs(rootPath)
 	if err != nil {
@@ -200,15 +205,23 @@ func (cm *CacheManager) ComputeRepositoryFileHashes(rootPath string, includeTest
 	reportRoot := moduleSearchRoot(root)
 	hashes := make(map[string]string, len(paths))
 	for _, path := range paths {
-		hash, hashErr := cm.ComputeFileHash(path)
-		if hashErr != nil {
-			return nil, hashErr
+		if err := cm.addRepositoryFileHash(hashes, reportRoot, path); err != nil {
+			return nil, err
 		}
-		relative, relativeErr := filepath.Rel(reportRoot, path)
-		if relativeErr != nil {
-			return nil, relativeErr
-		}
-		hashes[filepath.ToSlash(relative)] = hash
 	}
 	return hashes, nil
+}
+
+// addrepositoryfilehash handles add repository file hash
+func (cm *CacheManager) addRepositoryFileHash(hashes map[string]string, reportRoot, path string) error {
+	hash, err := cm.ComputeFileHash(path)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(reportRoot, path)
+	if err != nil {
+		return err
+	}
+	hashes[filepath.ToSlash(relative)] = hash
+	return nil
 }

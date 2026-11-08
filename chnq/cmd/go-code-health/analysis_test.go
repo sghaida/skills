@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -20,6 +21,7 @@ func makeRepo(t *testing.T, withModule bool) string {
 	}
 	return dir
 }
+
 func writeFixture(t *testing.T, root, name, content string) {
 	t.Helper()
 	p := filepath.Join(root, name)
@@ -81,7 +83,7 @@ func TestComplexCodeScoresLower(t *testing.T) {
 	var body strings.Builder
 	body.WriteString("package p\nfunc Hard(x int) int {\n")
 	for i := 0; i < 10; i++ {
-		body.WriteString(fmt.Sprintf("if x > %d { x++ }\n", i))
+		_, _ = fmt.Fprintf(&body, "if x > %d { x++ }\n", i)
 	}
 	body.WriteString("return x\n}\n")
 	writeFixture(t, root, "hard.go", body.String())
@@ -252,7 +254,7 @@ func TestGitChurnPaths(t *testing.T) {
 	writeFixture(t, root, "go.mod", "module example.com/git\n")
 	writeFixture(t, root, "main.go", "package main\nfunc main() {}\n")
 	run := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", root}, args...)...)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v (%s)", args, err, output)
 		}
@@ -269,10 +271,11 @@ func TestGitChurnPaths(t *testing.T) {
 	if err != nil || len(report.GitHotspots) == 0 {
 		t.Fatalf("git churn analysis failed: %v %+v", err, report.GitHotspots)
 	}
-	if err := applyGitChurn(t.TempDir(), nil, &Summary{}, &Report{}); err == nil {
+	if err := applyGitChurn(t.TempDir(), nil, &Summary{}); err == nil {
 		t.Fatal("expected git churn error outside a repository")
 	}
 }
+
 func TestComplexityAndDuplicationEdges(t *testing.T) {
 	src := `package demo
 func f(x interface{}) {

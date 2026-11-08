@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// clamp limits a score to the tool's 0-to-10 scale.
+// clamp limits a score to the tool's 0-to-10 scale
 func clamp(x float64) float64 {
 	if x < 0 {
 		return 0
@@ -18,10 +18,10 @@ func clamp(x float64) float64 {
 	return x
 }
 
-// round1 rounds a score or percentage to one decimal place.
+// round1 rounds a score or percentage to one decimal place
 func round1(x float64) float64 { return math.Round(x*10) / 10 }
 
-// percent returns n as a percentage of d, or zero when d is zero.
+// percent returns n as a percentage of d, or zero when d is zero
 func percent(n, d int) float64 {
 	if d == 0 {
 		return 0
@@ -29,10 +29,10 @@ func percent(n, d int) float64 {
 	return round1(100 * float64(n) / float64(d))
 }
 
-// ptr returns a pointer to f for optional report dimensions.
+// ptr returns a pointer to f for optional report dimensions
 func ptr(f float64) *float64 { return &f }
 
-// maxInt returns the larger of n and m.
+// maxint returns the larger of n and m
 func maxInt(n, m int) int {
 	if n > m {
 		return n
@@ -42,20 +42,20 @@ func maxInt(n, m int) int {
 
 // Each exact 35-token lexical window occurring in *different functions* is treated
 // as duplication. The overlap is unioned, so repeated windows do not overcount.
-// Comments and automatically inserted semicolons are ignored; names/literals are kept.
+// comments and automatically inserted semicolons are ignored; names/literals are kept
 type occurrence struct {
 	function *functionData
 	index    int
 }
 
-// tokenHash returns the rolling-hash input for one lexical token.
+// tokenhash returns the rolling-hash input for one lexical token
 func tokenHash(s string) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))
 	return h.Sum64()
 }
 
-// exactWindow verifies a candidate duplicate after its rolling hashes match.
+// exactwindow verifies a candidate duplicate after its rolling hashes match
 func exactWindow(a *functionData, ai int, b *functionData, bi, window int) bool {
 	for offset := 0; offset < window; offset++ {
 		if a.tokens[ai+offset] != b.tokens[bi+offset] {
@@ -65,7 +65,7 @@ func exactWindow(a *functionData, ai int, b *functionData, bi, window int) bool 
 	return true
 }
 
-// detectDuplicates marks tokens covered by duplicate windows across functions.
+// detectduplicates marks tokens covered by duplicate windows across functions
 func detectDuplicates(files []*sourceFile, window int) {
 	const base uint64 = 0x9e3779b185ebca87
 	power := rollingPower(base, window)
@@ -82,6 +82,7 @@ func detectDuplicates(files []*sourceFile, window int) {
 	}
 }
 
+// rollingpower handles rolling power
 func rollingPower(base uint64, window int) uint64 {
 	power := uint64(1)
 	for i := 1; i < window; i++ {
@@ -90,6 +91,7 @@ func rollingPower(base uint64, window int) uint64 {
 	return power
 }
 
+// detectfunctionduplicates handles detect function duplicates
 func detectFunctionDuplicates(fn *functionData, window int, base, power uint64, first map[uint64]occurrence) {
 	n := len(fn.tokens)
 	fn.duplicateMarkers = make([]int, n+1)
@@ -106,6 +108,7 @@ func detectFunctionDuplicates(fn *functionData, window int, base, power uint64, 
 	}
 }
 
+// tokenhashes handles token hashes
 func tokenHashes(tokens []string) []uint64 {
 	hashes := make([]uint64, len(tokens))
 	for i, token := range tokens {
@@ -114,6 +117,7 @@ func tokenHashes(tokens []string) []uint64 {
 	return hashes
 }
 
+// initialwindowhash handles initial window hash
 func initialWindowHash(hashes []uint64, window int, base uint64) uint64 {
 	var rolling uint64
 	for i := 0; i < window; i++ {
@@ -122,6 +126,7 @@ func initialWindowHash(hashes []uint64, window int, base uint64) uint64 {
 	return rolling
 }
 
+// recordduplicatewindow handles record duplicate window
 func recordDuplicateWindow(first map[uint64]occurrence, hash uint64, fn *functionData, index, window int) {
 	earlier, ok := first[hash]
 	if !ok {
@@ -137,6 +142,7 @@ func recordDuplicateWindow(first map[uint64]occurrence, hash uint64, fn *functio
 	fn.duplicateMarkers[index+window]--
 }
 
+// duplicatecoverage handles duplicate coverage
 func duplicateCoverage(fn *functionData) int {
 	coverage, duplicateTokens := 0, 0
 	for i := range fn.tokens {
@@ -148,7 +154,7 @@ func duplicateCoverage(fn *functionData) int {
 	return duplicateTokens
 }
 
-// complexityForFunction maps branching complexity to a 0-to-10 score.
+// complexityforfunction maps branching complexity to a 0-to-10 score
 func complexityForFunction(v int) float64 {
 	switch {
 	case v <= 5:
@@ -167,7 +173,7 @@ func complexityForFunction(v int) float64 {
 }
 
 // complexityForFile combines function complexity using a line-weighted average
-// and a smaller contribution from the file's worst-scoring function.
+// and a smaller contribution from the file's worst-scoring function
 func complexityForFile(f *sourceFile) float64 {
 	if len(f.funcs) == 0 {
 		return 10
@@ -185,7 +191,7 @@ func complexityForFile(f *sourceFile) float64 {
 	return clamp(0.8*weighted/totalWeight + 0.2*worst)
 }
 
-// structureForFile penalizes large files, long functions, and deep nesting.
+// structureforfile penalizes large files, long functions, and deep nesting
 func structureForFile(f *sourceFile) float64 {
 	sizePenalty := math.Min(2.5, 0.005*float64(maxInt(0, f.lines-400)))
 	if len(f.funcs) == 0 {
@@ -203,13 +209,13 @@ func structureForFile(f *sourceFile) float64 {
 	return clamp(10 - penalty)
 }
 
-// couplingForPackage converts internal package fan-out into a 0-to-10 score.
+// couplingforpackage converts internal package fan-out into a 0-to-10 score
 func couplingForPackage(fanOut int) float64 {
 	return clamp(10 - 1.25*float64(maxInt(0, fanOut-4)))
 }
 
 // scoreDimensions computes the weighted score for available dimensions.
-// Missing dimensions are omitted and the remaining weights are normalized.
+// missing dimensions are omitted and the remaining weights are normalized
 func scoreDimensions(d Dimensions) float64 {
 	weighted, weights := 0.0, 0.0
 	components := []struct {
@@ -232,7 +238,7 @@ func scoreDimensions(d Dimensions) float64 {
 }
 
 // fileScore builds a file report from analyzed metrics and emits threshold
-// findings for complexity, size, duplication, coupling, and nesting.
+// findings for complexity, size, duplication, coupling, and nesting
 func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 	duplicateTokens, totalFunctionTokens, dup := duplicationStats(f)
 	d := fileDimensions(f, moduleAvailable, dup)
@@ -256,6 +262,7 @@ func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
 	return r
 }
 
+// healthmetricsforfile handles health metrics for file
 func healthMetricsForFile(f *sourceFile) HealthMetrics {
 	return HealthMetrics{
 		ExportedSymbols: f.exportedSymbols, DocumentedExportedSymbols: f.documentedExportedSymbols,
@@ -268,6 +275,7 @@ func healthMetricsForFile(f *sourceFile) HealthMetrics {
 	}
 }
 
+// duplicationstats handles duplication stats
 func duplicationStats(f *sourceFile) (int, int, float64) {
 	if f.externalDuplicationPercent != nil {
 		return f.externalDuplicateTokens, f.externalTotalTokens, *f.externalDuplicationPercent
@@ -277,6 +285,7 @@ func duplicationStats(f *sourceFile) (int, int, float64) {
 	return duplicateTokens, totalFunctionTokens, percent(duplicateTokens, totalFunctionTokens)
 }
 
+// filedimensions handles file dimensions
 func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent float64) Dimensions {
 	d := Dimensions{
 		Complexity:  ptr(round1(complexityForFile(f))),
@@ -289,12 +298,14 @@ func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent floa
 	return d
 }
 
+// findingsforfile handles findings for file
 func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
 	findings := findingsForFunctions(f.funcs)
 	findings = appendFileFindings(findings, f, duplicationPercent, moduleAvailable)
 	return findings
 }
 
+// findingsforfunctions handles findings for functions
 func findingsForFunctions(functions []*functionData) []Finding {
 	findings := make([]Finding, 0)
 	for _, fn := range functions {
@@ -303,20 +314,51 @@ func findingsForFunctions(functions []*functionData) []Finding {
 	return findings
 }
 
+// appendfilefindings handles append file findings
 func appendFileFindings(findings []Finding, f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
+	findings = appendDuplicationFinding(findings, duplicationPercent)
+	findings = appendCouplingFinding(findings, f, moduleAvailable)
+	findings = appendFileSizeFinding(findings, f)
+	findings = appendDocumentationFinding(findings, f)
+	findings = appendHealthFindings(findings, f)
+	return findings
+}
+
+// appendduplicationfinding handles append duplication finding
+func appendDuplicationFinding(findings []Finding, duplicationPercent float64) []Finding {
 	if duplicationPercent >= 10 {
 		findings = append(findings, Finding{"duplicate-blocks", "warning", 0, format1(duplicationPercent) + "% of function tokens match another function"})
 	}
+	return findings
+}
+
+// appendcouplingfinding handles append coupling finding
+func appendCouplingFinding(findings []Finding, f *sourceFile, moduleAvailable bool) []Finding {
 	if moduleAvailable && f.packageFanOut > 6 {
 		findings = append(findings, Finding{"high-coupling", "warning", 0, "Package imports " + itoa(f.packageFanOut) + " internal packages"})
 	}
+	return findings
+}
+
+// appendfilesizefinding handles append file size finding
+func appendFileSizeFinding(findings []Finding, f *sourceFile) []Finding {
 	if f.lines > 600 {
 		findings = append(findings, Finding{"large-file", "warning", 0, itoa(f.lines) + " total lines"})
 	}
+	return findings
+}
+
+// appenddocumentationfinding handles append documentation finding
+func appendDocumentationFinding(findings []Finding, f *sourceFile) []Finding {
 	if f.exportedSymbols > 0 && f.documentedExportedSymbols < f.exportedSymbols {
 		findings = append(findings, Finding{"undocumented-exported-symbols", "warning", 0,
 			itoa(f.exportedSymbols-f.documentedExportedSymbols) + " exported symbols lack documentation"})
 	}
+	return findings
+}
+
+// appendhealthfindings handles append health findings
+func appendHealthFindings(findings []Finding, f *sourceFile) []Finding {
 	if f.ignoredReturnValues > 0 {
 		findings = append(findings, Finding{"ignored-return-value", "warning", 0,
 			itoa(f.ignoredReturnValues) + " return values are discarded"})
@@ -333,6 +375,7 @@ func appendFileFindings(findings []Finding, f *sourceFile, duplicationPercent fl
 	return findings
 }
 
+// findingsforfunction handles findings for function
 func findingsForFunction(fn *functionData) []Finding {
 	findings := make([]Finding, 0, 3)
 	if fn.report.BranchingComplexity > 15 {
@@ -352,12 +395,13 @@ func findingsForFunction(fn *functionData) []Finding {
 }
 
 // weightedDimensions aggregates file reports using each file's line count as
-// its weight, while averaging each dimension only across reports that provide it.
+// its weight, while averaging each dimension only across reports that provide it
 func weightedDimensions(files []FileReport) (Dimensions, float64) {
 	sum, sizes, total, totalWeight := weightedTotals(files)
 	return dimensionsFromTotals(sum, sizes, total, totalWeight)
 }
 
+// weightedtotals handles weighted totals
 func weightedTotals(files []FileReport) ([4]float64, [4]float64, float64, float64) {
 	sum := [4]float64{}
 	sizes := [4]float64{}
@@ -377,6 +421,7 @@ func weightedTotals(files []FileReport) ([4]float64, [4]float64, float64, float6
 	return sum, sizes, total, totalWeight
 }
 
+// dimensionsfromtotals handles dimensions from totals
 func dimensionsFromTotals(sum, sizes [4]float64, total, totalWeight float64) (Dimensions, float64) {
 	d := Dimensions{}
 	dimensions := []*float64{d.Complexity, d.Structure, d.Duplication, d.Coupling}
@@ -393,7 +438,7 @@ func dimensionsFromTotals(sum, sizes [4]float64, total, totalWeight float64) (Di
 }
 
 // buildScores creates deterministic file and package reports and the overall
-// repository dimensions and score.
+// repository dimensions and score
 func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageReport, Dimensions, *float64) {
 	results := make([]FileReport, 0, len(files))
 	packages := make(map[string][]FileReport)
@@ -441,8 +486,8 @@ func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageRe
 	return results, packageReports, dims, ptr(score)
 }
 
-// itoa formats an integer for human-readable finding messages.
+// itoa formats an integer for human-readable finding messages
 func itoa(x int) string { return strconv.Itoa(x) }
 
-// format1 formats a floating-point value with one decimal place.
+// format1 formats a floating-point value with one decimal place
 func format1(x float64) string { return strconv.FormatFloat(x, 'f', 1, 64) }

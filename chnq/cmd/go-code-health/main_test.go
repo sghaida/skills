@@ -64,6 +64,7 @@ func TestMainFormattingAndValidation(t *testing.T) {
 		t.Fatal("expected valid flags")
 	}
 }
+
 func TestJSONReportOutput(t *testing.T) {
 	var output bytes.Buffer
 	score := 8.0
@@ -73,6 +74,7 @@ func TestJSONReportOutput(t *testing.T) {
 		t.Fatal("JSON encoding failed")
 	}
 }
+
 func TestRunCLIPaths(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "go.mod", "module example.com/cli\n")

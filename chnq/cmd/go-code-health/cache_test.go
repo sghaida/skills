@@ -55,6 +55,7 @@ func TestEmitReportAndCacheHashMaps(t *testing.T) {
 		t.Fatal("expected cache rename error")
 	}
 }
+
 func TestComputeRepositoryHashIgnoresBuildArtifacts(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "main.go", "package main\n")
@@ -70,6 +71,7 @@ func TestComputeRepositoryHashIgnoresBuildArtifacts(t *testing.T) {
 		t.Fatalf("build artifact changed repository hash: %q %q %v", first, second, err)
 	}
 }
+
 func TestHotspotBehaviorPatternsAndCacheErrors(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "handler.go")

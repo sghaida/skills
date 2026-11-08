@@ -4,14 +4,14 @@ import (
 	"sort"
 )
 
-// IncrementalUpdate manages cache merging and incremental updates
+// incrementalupdate manages cache merging and incremental updates
 type IncrementalUpdate struct {
 	oldCache     *CacheFile
 	newReport    *Report
 	changedFiles map[string]bool
 }
 
-// NewIncrementalUpdate creates an incremental update manager
+// newincrementalupdate creates an incremental update manager
 func NewIncrementalUpdate(oldCache *CacheFile, newReport *Report, changedFiles map[string]bool) *IncrementalUpdate {
 	return &IncrementalUpdate{
 		oldCache:     oldCache,
@@ -20,9 +20,16 @@ func NewIncrementalUpdate(oldCache *CacheFile, newReport *Report, changedFiles m
 	}
 }
 
+// mergefilereports handles merge file reports
 func (iu *IncrementalUpdate) mergeFileReports() map[string]*FileReport {
 	fileMap := make(map[string]*FileReport)
+	iu.addUnchangedFiles(fileMap)
+	iu.addNewFiles(fileMap)
+	return fileMap
+}
 
+// addunchangedfiles handles add unchanged files
+func (iu *IncrementalUpdate) addUnchangedFiles(fileMap map[string]*FileReport) {
 	if iu.oldCache != nil && iu.oldCache.Report != nil {
 		for i := range iu.oldCache.Report.Files {
 			f := &iu.oldCache.Report.Files[i]
@@ -31,15 +38,17 @@ func (iu *IncrementalUpdate) mergeFileReports() map[string]*FileReport {
 			}
 		}
 	}
+}
 
+// addnewfiles handles add new files
+func (iu *IncrementalUpdate) addNewFiles(fileMap map[string]*FileReport) {
 	for i := range iu.newReport.Files {
 		f := &iu.newReport.Files[i]
 		fileMap[f.Path] = f
 	}
-
-	return fileMap
 }
 
+// buildfilelist handles build file list
 func (iu *IncrementalUpdate) buildFileList(fileMap map[string]*FileReport) []FileReport {
 	var files []FileReport
 	for _, f := range fileMap {
@@ -56,6 +65,7 @@ func (iu *IncrementalUpdate) buildFileList(fileMap map[string]*FileReport) []Fil
 	return files
 }
 
+// extracthotspots handles extract hotspots
 func (iu *IncrementalUpdate) extractHotspots(files []FileReport) []FileReport {
 	var hotspots []FileReport
 	for _, f := range files {
@@ -66,6 +76,7 @@ func (iu *IncrementalUpdate) extractHotspots(files []FileReport) []FileReport {
 	return hotspots
 }
 
+// buildpackagereports handles build package reports
 func (iu *IncrementalUpdate) buildPackageReports(files []FileReport) []PackageReport {
 	pkgMap := make(map[string]*PackageReport)
 	for _, f := range files {
@@ -91,7 +102,7 @@ func (iu *IncrementalUpdate) buildPackageReports(files []FileReport) []PackageRe
 	return packages
 }
 
-// MergeReports merges old and new analysis results
+// mergereports merges old and new analysis results
 func (iu *IncrementalUpdate) MergeReports() *Report {
 	merged := &Report{
 		SchemaVersion:   iu.newReport.SchemaVersion,
@@ -117,6 +128,7 @@ func (iu *IncrementalUpdate) MergeReports() *Report {
 	return merged
 }
 
+// accumulatefilemetrics handles accumulate file metrics
 func accumulateFileMetrics(summary *Summary, file FileReport) {
 	summary.SourceLines += file.Lines
 	summary.Functions += len(file.Functions)
@@ -136,6 +148,7 @@ func accumulateFileMetrics(summary *Summary, file FileReport) {
 	summary.Health.GitChurn += file.Health.GitChurn
 }
 
+// rebuildaggregatemetrics handles rebuild aggregate metrics
 func rebuildAggregateMetrics(report *Report) {
 	summary := report.Summary
 	summary.GoFiles = len(report.Files)
@@ -168,6 +181,7 @@ func rebuildAggregateMetrics(report *Report) {
 	}
 }
 
+// addweighteddimensions handles add weighted dimensions
 func addWeightedDimensions(current, next Dimensions, weight, total float64) Dimensions {
 	average := func(a, b *float64) *float64 {
 		if b == nil {
@@ -188,6 +202,7 @@ func addWeightedDimensions(current, next Dimensions, weight, total float64) Dime
 	}
 }
 
+// aggregatescore handles aggregate score
 func aggregateScore(dimensions Dimensions) *float64 {
 	var total, weight float64
 	add := func(value *float64, dimensionWeight float64) {
@@ -207,23 +222,28 @@ func aggregateScore(dimensions Dimensions) *float64 {
 	return &score
 }
 
-// IdentifyChangedFiles determines which files changed based on hashes
+// identifychangedfiles determines which files changed based on hashes
 func IdentifyChangedFiles(oldHashes, newHashes map[string]string) map[string]bool {
 	changed := make(map[string]bool)
+	addNewOrChangedFiles(changed, oldHashes, newHashes)
+	addDeletedFiles(changed, oldHashes, newHashes)
+	return changed
+}
 
-	// Files in new but not old, or with different hash
+// addneworchangedfiles handles add new or changed files
+func addNewOrChangedFiles(changed map[string]bool, oldHashes, newHashes map[string]string) {
 	for path, newHash := range newHashes {
 		if oldHash, exists := oldHashes[path]; !exists || oldHash != newHash {
 			changed[path] = true
 		}
 	}
+}
 
-	// Files in old but not new (deleted)
+// adddeletedfiles handles add deleted files
+func addDeletedFiles(changed map[string]bool, oldHashes, newHashes map[string]string) {
 	for path := range oldHashes {
 		if _, exists := newHashes[path]; !exists {
 			changed[path] = true
 		}
 	}
-
-	return changed
 }
