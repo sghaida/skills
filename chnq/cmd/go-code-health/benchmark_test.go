@@ -40,15 +40,28 @@ func benchmarkConfig(root string, cacheFile string, noCache bool) RunConfig {
 	}
 }
 
+func analyzeForBenchmark(cacheManager *CacheManager, config RunConfig) error {
+	scan, err := resolveScanContext(config.path, config.includeTests, config.includeGitChurn)
+	if err != nil {
+		return err
+	}
+	manifest, err := buildSourceManifest(scan)
+	if err != nil {
+		return err
+	}
+	_, err = performAnalysis(cacheManager, scan, config, manifest, manifestFingerprint(manifest))
+	return err
+}
+
 func BenchmarkColdScan(b *testing.B) {
 	root := benchmarkProject(b)
 	cacheFile := filepath.Join(root, "cold-cache.json")
-	cacheManager := NewCacheManager(cacheFile, scoringVersion)
+	cacheManager := NewCacheManager(cacheFile)
 	config := benchmarkConfig(root, cacheFile, true)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := performAnalysis(cacheManager, config); err != nil {
+		if err := analyzeForBenchmark(cacheManager, config); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -57,19 +70,23 @@ func BenchmarkColdScan(b *testing.B) {
 func BenchmarkCachedScan(b *testing.B) {
 	root := benchmarkProject(b)
 	cacheFile := filepath.Join(root, "cached-cache.json")
-	cacheManager := NewCacheManager(cacheFile, scoringVersion)
+	cacheManager := NewCacheManager(cacheFile)
 	config := benchmarkConfig(root, cacheFile, false)
-	if _, err := performAnalysis(cacheManager, benchmarkConfig(root, cacheFile, true)); err != nil {
+	if err := analyzeForBenchmark(cacheManager, config); err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		currentHash, err := cacheManager.ComputeRepositoryHash(root)
+		scan, err := resolveScanContext(config.path, false, false)
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, found := checkCachedReport(cacheManager, config, currentHash); !found {
+		manifest, err := buildSourceManifest(scan)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, found := cachedReport(cacheManager, scan.Fingerprint(), manifestFingerprint(manifest), false); !found {
 			b.Fatal("expected a valid cached report")
 		}
 	}
@@ -78,16 +95,16 @@ func BenchmarkCachedScan(b *testing.B) {
 func BenchmarkIncrementalScan(b *testing.B) {
 	root := benchmarkProject(b)
 	cacheFile := filepath.Join(root, "incremental-cache.json")
-	cacheManager := NewCacheManager(cacheFile, scoringVersion)
+	cacheManager := NewCacheManager(cacheFile)
 	config := benchmarkConfig(root, cacheFile, false)
-	if _, err := performAnalysis(cacheManager, benchmarkConfig(root, cacheFile, true)); err != nil {
+	if err := analyzeForBenchmark(cacheManager, config); err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		writeBenchmarkFixture(b, root, filepath.Join("pkg", "file_00.go"),
 			fmt.Sprintf("package pkg\n\nfunc Function00(value int) int {\n\treturn value + %d\n}\n", i))
-		if _, err := performAnalysis(cacheManager, config); err != nil {
+		if err := analyzeForBenchmark(cacheManager, config); err != nil {
 			b.Fatal(err)
 		}
 	}

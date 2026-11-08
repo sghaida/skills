@@ -88,11 +88,20 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 17. The analyzer uses a bounded worker pool for file parsing. The default is
     10 workers; pass `--workers N` to select 1–256 workers. Results are ordered
     deterministically, so changing worker count must not change the report.
-18. The analyzer stores an optional local cache in `.chnq-health-status`.
-    When the repository hash matches, the complete report is reused. When only
-    some files changed, the changed files are rescanned and merged with
-    unchanged cached file reports. The cache is machine-local and must remain
-    git-ignored; use `--no-cache` to force a complete scan.
+18. The analyzer stores an optional local cache, by default in
+    `.chnq-health-status` inside the analyzed project root (pass
+    `--cache-file` to relocate it). A cached complete report is reused only on
+    an exact match of the semantic scan fingerprint (options, project policy,
+    module identity, duplication-engine identity, and Git refs when churn is
+    enabled) plus the full eligible-file manifest of paths and content hashes.
+    After any change, unchanged files are restored from cached file-local
+    snapshots instead of being reparsed, and every project-wide metric —
+    duplication, dependencies, interfaces, Git churn, and all scores — is
+    recomputed over the complete project model, so cached, incremental, and
+    `--no-cache` scans produce semantically identical reports. The cache is
+    machine-local and must remain git-ignored; use `--no-cache` to force a
+    complete scan and `--cache-debug` to print the cache decision (HIT,
+    INCREMENTAL, MISS, INVALIDATED, REBUILT, or BYPASSED) to stderr.
 19. Use `--explain-hotspots` for a deterministic Markdown summary. The
     default `--hotspots-scope file` explains file hotspots; use
     `--hotspots-scope package` to aggregate low-scoring files by enclosing
@@ -125,6 +134,12 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
 
 # Force a complete rescan
 ./scripts/analyze.sh /path/to/go/repository --no-cache
+
+# Show why the cache was reused, invalidated, or rebuilt
+./scripts/analyze.sh /path/to/go/repository --cache-debug
+
+# Inspect stored cache metadata and validity without scanning
+./scripts/analyze.sh /path/to/go/repository --cache-info
 ```
 
 

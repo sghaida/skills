@@ -11,7 +11,7 @@ coverage.out
 *.swp
 *.swo
 .chnq-health-status
-.chnq-health-status.tmp
+.chnq-health-status.tmp*
 
 # VS Code local workspace files
 .vscode/

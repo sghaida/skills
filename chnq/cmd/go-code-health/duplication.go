@@ -16,7 +16,13 @@ import (
 const (
 	duplicationEngineInternal = "internal"
 	duplicationEngineJSCPDRS  = "jscpd-rs"
+	projectConfigFileName     = ".go-code-health.json"
 )
+
+// errMissingJSCPD reports that the selected external engine is unavailable.
+func errMissingJSCPD() error {
+	return errors.New("jscpd-rs duplication engine selected, but the jscpd executable was not found; run `make install-jscpd-rs`")
+}
 
 // projectconfig represents project config data
 type projectConfig struct {
@@ -58,15 +64,32 @@ func loadDuplicationEngine(root string) (string, error) {
 }
 
 func loadProjectConfig(root string) (projectConfig, error) {
-	configPath := filepath.Join(root, ".go-code-health.json")
+	data, _, err := readProjectConfig(root)
+	if err != nil {
+		return projectConfig{}, err
+	}
+	return parseProjectConfig(data, filepath.Join(root, projectConfigFileName))
+}
+
+// readProjectConfig returns the raw policy bytes, or present=false when the
+// project has no policy file.
+func readProjectConfig(root string) ([]byte, bool, error) {
+	configPath := filepath.Join(root, projectConfigFileName)
 	data, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return projectConfig{BroadInterfaceThreshold: defaultBroadInterfaceThreshold}, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return projectConfig{}, fmt.Errorf("read %s: %w", configPath, err)
+		return nil, false, fmt.Errorf("read %s: %w", configPath, err)
 	}
+	return data, true, nil
+}
 
+// parseProjectConfig decodes policy bytes, applying defaults when absent.
+func parseProjectConfig(data []byte, configPath string) (projectConfig, error) {
+	if data == nil {
+		return projectConfig{BroadInterfaceThreshold: defaultBroadInterfaceThreshold}, nil
+	}
 	var config projectConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return projectConfig{}, fmt.Errorf("parse %s: %w", configPath, err)
@@ -91,7 +114,7 @@ func validateDuplicationEngine(engine, configPath string) (string, error) {
 func detectWithJSCPDRS(root string, files []*sourceFile, summary *Summary) error {
 	jscpdPath, err := locateJSCPD()
 	if err != nil {
-		return errors.New("jscpd-rs duplication engine selected, but the jscpd executable was not found; run `make install-jscpd-rs`")
+		return errMissingJSCPD()
 	}
 	reportDir, err := os.MkdirTemp("", "go-code-health-jscpd-*")
 	if err != nil {

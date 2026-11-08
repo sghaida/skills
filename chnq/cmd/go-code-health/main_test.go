@@ -105,15 +105,29 @@ func TestRunCLIPaths(t *testing.T) {
 	if code := runWithArgs("-path", root, "-fail-under", "10", "-no-cache"); code != 3 {
 		t.Fatalf("threshold failure returned %d", code)
 	}
-	manager := NewCacheManager(cache, scoringVersion)
-	hash, err := manager.ComputeRepositoryHash(root)
-	if err != nil {
-		t.Fatal(err)
+	manager := NewCacheManager(cache)
+	writeCachedReport := func(report *Report) {
+		t.Helper()
+		scan, err := resolveScanContext(root, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := buildSourceManifest(scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cacheEntry := &CacheFile{
+			ContextHash:  scan.Fingerprint(),
+			ManifestHash: manifestFingerprint(manifest),
+			FileManifest: manifest,
+			Report:       report,
+		}
+		if err := manager.WriteCache(cacheEntry); err != nil {
+			t.Fatal(err)
+		}
 	}
 	incomplete := Report{ScoringVersion: scoringVersion, AnalysisStatus: "incomplete"}
-	if err := manager.WriteCache(&incomplete, hash, 0, root); err != nil {
-		t.Fatal(err)
-	}
+	writeCachedReport(&incomplete)
 	if code := runWithArgs("-path", root, "-cache-file", cache); code != 2 {
 		t.Fatalf("incomplete cached report returned %d", code)
 	}
@@ -125,17 +139,11 @@ func TestRunCLIPaths(t *testing.T) {
 	}
 	writeFixture(t, root, "main.go", "package main\nfunc main() { println(1) }\n")
 	if code := runWithArgs("-path", root, "-cache-file", cache); code != 0 {
-		t.Fatalf("incremental CLI run returned %d", code)
-	}
-	hash, err = manager.ComputeRepositoryHash(root)
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("rescan after change returned %d", code)
 	}
 	lowScore := 1.0
 	low := Report{ScoringVersion: scoringVersion, AnalysisStatus: "complete", CodeHealthScore: &lowScore}
-	if err := manager.WriteCache(&low, hash, 0, root); err != nil {
-		t.Fatal(err)
-	}
+	writeCachedReport(&low)
 	if code := runWithArgs("-path", root, "-cache-file", cache, "-fail-under", "5"); code != 3 {
 		t.Fatalf("cached threshold failure returned %d", code)
 	}

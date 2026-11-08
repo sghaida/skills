@@ -33,7 +33,11 @@ func TestTopGitHotspotsSortsAndLimitsResults(t *testing.T) {
 }
 
 func TestPrepareAnalysisRejectsMissingPath(t *testing.T) {
-	if _, err := prepareAnalysis("/path/that/does/not/exist", false, false); err == nil {
+	scan, err := resolveScanContext("/path/that/does/not/exist", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareAnalysisContext(scan); err == nil {
 		t.Fatal("expected missing path error")
 	}
 }
