@@ -1,5 +1,6 @@
 <!-- markdownlint-disable MD013 MD041 -->
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/58254c68d00b4e268740898031ca76fb)](https://app.codacy.com/gh/sghaida/skills/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Codacy Badge](https://app.codacy.com/project/badge/Coverage/58254c68d00b4e268740898031ca76fb)](https://app.codacy.com/gh/sghaida/skills/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
 <!-- markdownlint-enable MD013 MD041 -->
 
 # Skills
