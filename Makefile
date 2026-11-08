@@ -104,7 +104,7 @@ coverage-codacy: coverage-report
 	@command -v curl >/dev/null 2>&1 || { printf 'curl is required to upload coverage to Codacy\n' >&2; exit 2; }
 	@CODACY_PROJECT_TOKEN="$(CODACY_PROJECT_TOKEN)" COVERAGE_PROFILE="$(COVERAGE_PROFILE)" \
 	  CODACY_COVERAGE_REPORTER_URL="$(CODACY_COVERAGE_REPORTER_URL)" \
-	  bash -c 'set -eu; bash <(curl -Ls "$$CODACY_COVERAGE_REPORTER_URL") report --project-token "$$CODACY_PROJECT_TOKEN" --coverage-reports "$$COVERAGE_PROFILE" --language go'
+	  bash -c 'set -eu; bash <(curl -Ls "$$CODACY_COVERAGE_REPORTER_URL") report --project-token "$$CODACY_PROJECT_TOKEN" --coverage-reports "$$COVERAGE_PROFILE" --language go --force-coverage-parser go'
 
 vet:
 	@cd "$(PROJECT_DIR)" && GOWORK=off $(GO) vet ./...
