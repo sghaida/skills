@@ -433,6 +433,12 @@ func run() int {
 	manifestHash := manifestFingerprint(manifest)
 
 	if report, found := cachedReport(cacheMgr, scan.Fingerprint(), manifestHash, cfg.noCache); found {
+		discovery := Summary{}
+		if _, err := sourceFiles(scan.Root, scan.IncludeTests, &discovery); err != nil {
+			fmt.Fprintln(os.Stderr, "manifest error:", err)
+			return 2
+		}
+		report.Summary.ExcludedTestFiles = discovery.ExcludedTestFiles
 		reportCacheDecision(cfg, CacheDecision{
 			Status: cacheStatusHit, Reason: "exact-context-and-manifest-match",
 			FilesTotal: len(manifest), SnapshotsReused: len(manifest),
