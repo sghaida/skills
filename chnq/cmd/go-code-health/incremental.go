@@ -20,6 +20,77 @@ func NewIncrementalUpdate(oldCache *CacheFile, newReport *Report, changedFiles m
 	}
 }
 
+func (iu *IncrementalUpdate) mergeFileReports() map[string]*FileReport {
+	fileMap := make(map[string]*FileReport)
+
+	if iu.oldCache != nil && iu.oldCache.Report != nil {
+		for i := range iu.oldCache.Report.Files {
+			f := &iu.oldCache.Report.Files[i]
+			if !iu.changedFiles[f.Path] {
+				fileMap[f.Path] = f
+			}
+		}
+	}
+
+	for i := range iu.newReport.Files {
+		f := &iu.newReport.Files[i]
+		fileMap[f.Path] = f
+	}
+
+	return fileMap
+}
+
+func (iu *IncrementalUpdate) buildFileList(fileMap map[string]*FileReport) []FileReport {
+	var files []FileReport
+	for _, f := range fileMap {
+		files = append(files, *f)
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Score == files[j].Score {
+			return files[i].Path < files[j].Path
+		}
+		return files[i].Score < files[j].Score
+	})
+
+	return files
+}
+
+func (iu *IncrementalUpdate) extractHotspots(files []FileReport) []FileReport {
+	var hotspots []FileReport
+	for _, f := range files {
+		if f.Score < 8 {
+			hotspots = append(hotspots, f)
+		}
+	}
+	return hotspots
+}
+
+func (iu *IncrementalUpdate) buildPackageReports(files []FileReport) []PackageReport {
+	pkgMap := make(map[string]*PackageReport)
+	for _, f := range files {
+		if _, exists := pkgMap[f.Package]; !exists {
+			pkgMap[f.Package] = &PackageReport{
+				Path: f.Package,
+			}
+		}
+		pkg := pkgMap[f.Package]
+		pkg.Files++
+		pkg.Lines += f.Lines
+	}
+
+	var packages []PackageReport
+	for _, pkg := range pkgMap {
+		packages = append(packages, *pkg)
+	}
+
+	sort.Slice(packages, func(i, j int) bool {
+		return packages[i].Path < packages[j].Path
+	})
+
+	return packages
+}
+
 // MergeReports merges old and new analysis results
 func (iu *IncrementalUpdate) MergeReports() *Report {
 	merged := &Report{
@@ -37,70 +108,32 @@ func (iu *IncrementalUpdate) MergeReports() *Report {
 		Warnings:        iu.newReport.Warnings,
 	}
 
-	// Merge files: keep old unchanged, add new changed
-	fileMap := make(map[string]*FileReport)
-
-	// Add old files (for those not changed)
-	if iu.oldCache != nil && iu.oldCache.Report != nil {
-		for i := range iu.oldCache.Report.Files {
-			f := &iu.oldCache.Report.Files[i]
-			if !iu.changedFiles[f.Path] {
-				fileMap[f.Path] = f
-			}
-		}
-	}
-
-	// Add/override with new files
-	for i := range iu.newReport.Files {
-		f := &iu.newReport.Files[i]
-		fileMap[f.Path] = f
-	}
-
-	// Build merged file list
-	for _, f := range fileMap {
-		merged.Files = append(merged.Files, *f)
-	}
-
-	// Re-sort by score to identify new hotspots
-	sort.Slice(merged.Files, func(i, j int) bool {
-		if merged.Files[i].Score == merged.Files[j].Score {
-			return merged.Files[i].Path < merged.Files[j].Path
-		}
-		return merged.Files[i].Score < merged.Files[j].Score
-	})
-
-	// Recompute hotspots (files with score < 8)
-	merged.Hotspots = nil
-	for _, f := range merged.Files {
-		if f.Score < 8 {
-			merged.Hotspots = append(merged.Hotspots, f)
-		}
-	}
-
-	// Merge packages (recompute from merged files)
-	pkgMap := make(map[string]*PackageReport)
-	for _, f := range merged.Files {
-		if _, exists := pkgMap[f.Package]; !exists {
-			pkgMap[f.Package] = &PackageReport{
-				Path: f.Package,
-			}
-		}
-		pkg := pkgMap[f.Package]
-		pkg.Files++
-		pkg.Lines += f.Lines
-	}
-
-	for _, pkg := range pkgMap {
-		merged.Packages = append(merged.Packages, *pkg)
-	}
-
-	// Sort packages by path
-	sort.Slice(merged.Packages, func(i, j int) bool {
-		return merged.Packages[i].Path < merged.Packages[j].Path
-	})
+	fileMap := iu.mergeFileReports()
+	merged.Files = iu.buildFileList(fileMap)
+	merged.Hotspots = iu.extractHotspots(merged.Files)
+	merged.Packages = iu.buildPackageReports(merged.Files)
 
 	rebuildAggregateMetrics(merged)
 	return merged
+}
+
+func accumulateFileMetrics(summary *Summary, file FileReport) {
+	summary.SourceLines += file.Lines
+	summary.Functions += len(file.Functions)
+	summary.DuplicateTokens += file.DuplicateTokens
+	summary.FunctionTokens += file.TotalFunctionTokens
+	summary.Health.ExportedSymbols += file.Health.ExportedSymbols
+	summary.Health.DocumentedExportedSymbols += file.Health.DocumentedExportedSymbols
+	summary.Health.IgnoredReturnValues += file.Health.IgnoredReturnValues
+	summary.Health.Panics += file.Health.Panics
+	summary.Health.TODOs += file.Health.TODOs
+	summary.Health.FIXMEs += file.Health.FIXMEs
+	summary.Health.Goroutines += file.Health.Goroutines
+	summary.Health.ChannelOperations += file.Health.ChannelOperations
+	summary.Health.ImportCycles += file.Health.ImportCycles
+	summary.Health.DependencyDepth += file.Health.DependencyDepth
+	summary.Health.IncomingDependencies += file.Health.IncomingDependencies
+	summary.Health.GitChurn += file.Health.GitChurn
 }
 
 func rebuildAggregateMetrics(report *Report) {
@@ -115,22 +148,7 @@ func rebuildAggregateMetrics(report *Report) {
 	var weighted Dimensions
 	var totalWeight float64
 	for _, file := range report.Files {
-		summary.SourceLines += file.Lines
-		summary.Functions += len(file.Functions)
-		summary.DuplicateTokens += file.DuplicateTokens
-		summary.FunctionTokens += file.TotalFunctionTokens
-		summary.Health.ExportedSymbols += file.Health.ExportedSymbols
-		summary.Health.DocumentedExportedSymbols += file.Health.DocumentedExportedSymbols
-		summary.Health.IgnoredReturnValues += file.Health.IgnoredReturnValues
-		summary.Health.Panics += file.Health.Panics
-		summary.Health.TODOs += file.Health.TODOs
-		summary.Health.FIXMEs += file.Health.FIXMEs
-		summary.Health.Goroutines += file.Health.Goroutines
-		summary.Health.ChannelOperations += file.Health.ChannelOperations
-		summary.Health.ImportCycles += file.Health.ImportCycles
-		summary.Health.DependencyDepth += file.Health.DependencyDepth
-		summary.Health.IncomingDependencies += file.Health.IncomingDependencies
-		summary.Health.GitChurn += file.Health.GitChurn
+		accumulateFileMetrics(&summary, file)
 		weight := float64(file.Lines)
 		if weight == 0 {
 			weight = 1

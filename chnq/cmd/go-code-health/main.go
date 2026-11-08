@@ -283,25 +283,34 @@ func checkFailUnder(report Report, failUnder float64) int {
 	return 0
 }
 
+func detectChangedFiles(cacheMgr *CacheManager, cfg RunConfig) (*CacheFile, map[string]bool) {
+	if cfg.noCache {
+		return nil, nil
+	}
+
+	cached, err := cacheMgr.ReadCache()
+	if err != nil || cached == nil || cached.Version != scoringVersion ||
+		cached.Report == nil || len(cached.FilesHashMap) == 0 {
+		return nil, nil
+	}
+
+	currentFiles, hashErr := cacheMgr.ComputeRepositoryFileHashes(cfg.path, cfg.includeTests)
+	if hashErr != nil {
+		return nil, nil
+	}
+
+	changedFiles := IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
+	if len(changedFiles) == 0 || len(changedFiles) >= len(currentFiles) {
+		return nil, nil
+	}
+
+	return cached, changedFiles
+}
+
 func performAnalysis(cacheMgr *CacheManager, cfg RunConfig) (Report, error) {
 	start := time.Now()
 
-	var oldCache *CacheFile
-	var changedFiles map[string]bool
-
-	if !cfg.noCache {
-		cached, err := cacheMgr.ReadCache()
-		if err == nil && cached != nil && cached.Version == scoringVersion &&
-			cached.Report != nil && len(cached.FilesHashMap) > 0 {
-			currentFiles, hashErr := cacheMgr.ComputeRepositoryFileHashes(cfg.path, cfg.includeTests)
-			if hashErr == nil {
-				changedFiles = IdentifyChangedFiles(cached.FilesHashMap, currentFiles)
-				if len(changedFiles) > 0 && len(changedFiles) < len(currentFiles) {
-					oldCache = cached
-				}
-			}
-		}
-	}
+	oldCache, changedFiles := detectChangedFiles(cacheMgr, cfg)
 
 	var report Report
 	var err error

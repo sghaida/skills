@@ -326,6 +326,37 @@ func analyzeWithOptions(path string, includeTests, includeGitChurn bool, workers
 	return analyzeWithOptionsFiltered(path, includeTests, includeGitChurn, workerCount, nil)
 }
 
+func filterSourceFiles(paths []string, root string, fileFilter map[string]bool) ([]string, error) {
+	if fileFilter == nil {
+		return paths, nil
+	}
+	filtered := paths[:0]
+	for _, candidate := range paths {
+		relative, relativeErr := filepath.Rel(root, candidate)
+		if relativeErr == nil && fileFilter[filepath.ToSlash(relative)] {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered, nil
+}
+
+func validateSourceFiles(paths []string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("no eligible Go files found")
+	}
+	return nil
+}
+
+func postProcessReport(report *Report, parsedFiles []*sourceFile, includeGitChurn bool, hasModule bool) error {
+	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, hasModule)
+	finalizeReport(report)
+	report.Hotspots = topHotspots(report.Files)
+	if includeGitChurn {
+		report.GitHotspots = topGitHotspots(report.Files)
+	}
+	return nil
+}
+
 func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool, workers int, fileFilter map[string]bool) (Report, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
@@ -336,8 +367,8 @@ func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool,
 	if err != nil {
 		return Report{}, err
 	}
-	if len(paths) == 0 {
-		return Report{}, fmt.Errorf("no eligible Go files found in %q", root)
+	if err := validateSourceFiles(paths); err != nil {
+		return Report{}, fmt.Errorf("%w in %q", err, root)
 	}
 	duplicationEngine, err := loadDuplicationEngine(root)
 	if err != nil {
@@ -345,16 +376,12 @@ func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool,
 	}
 	module, _ := locateModule(root)
 	report := newReport(root, includeTests, includeGitChurn, duplicationEngine)
-	if fileFilter != nil {
-		filtered := paths[:0]
-		for _, candidate := range paths {
-			relative, relativeErr := filepath.Rel(root, candidate)
-			if relativeErr == nil && fileFilter[filepath.ToSlash(relative)] {
-				filtered = append(filtered, candidate)
-			}
-		}
-		paths = filtered
+
+	paths, err = filterSourceFiles(paths, root, fileFilter)
+	if err != nil {
+		return Report{}, err
 	}
+
 	parsedFiles, err := parseSourceFiles(paths, root, &summary, &report, workers)
 	if err != nil {
 		return Report{}, err
@@ -378,11 +405,8 @@ func analyzeWithOptionsFiltered(path string, includeTests, includeGitChurn bool,
 	}
 	finalizeDuplicationSummary(parsedFiles, duplicationEngine, &summary)
 	report.Summary = summary
-	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, module != "")
-	finalizeReport(&report)
-	report.Hotspots = topHotspots(report.Files)
-	if includeGitChurn {
-		report.GitHotspots = topGitHotspots(report.Files)
+	if err := postProcessReport(&report, parsedFiles, includeGitChurn, module != ""); err != nil {
+		return Report{}, err
 	}
 	return report, nil
 }

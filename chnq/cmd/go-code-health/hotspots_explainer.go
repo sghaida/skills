@@ -83,58 +83,54 @@ func (he *HotspotsExplainer) GenerateExplanations() (string, error) {
 }
 
 // explainHotspot creates detailed explanation for one hotspot
-func (he *HotspotsExplainer) explainHotspot(hotspot *FileReport) (*Explanation, error) {
-	exp := &Explanation{
-		Path:         hotspot.Path,
-		OverallScore: hotspot.Score,
-	}
-
-	// Measured findings
-	var findings strings.Builder
-	findings.WriteString(fmt.Sprintf("- **%d-line file**", hotspot.Lines))
-	if len(hotspot.Functions) > 0 {
-		findings.WriteString(fmt.Sprintf(" with %d functions", len(hotspot.Functions)))
-	}
-	findings.WriteString(".\n")
-
-	// Find longest function
-	maxFuncLen := 0
-	maxFuncName := ""
+func (he *HotspotsExplainer) findLongestFunction(hotspot *FileReport) (string, int) {
+	maxLen := 0
+	maxName := ""
 	for _, fn := range hotspot.Functions {
-		if fn.Lines > maxFuncLen {
-			maxFuncLen = fn.Lines
-			maxFuncName = fn.Name
+		if fn.Lines > maxLen {
+			maxLen = fn.Lines
+			maxName = fn.Name
 		}
 	}
-	if maxFuncName != "" {
-		findings.WriteString(fmt.Sprintf("- **%s function**: %d lines", maxFuncName, maxFuncLen))
+	return maxName, maxLen
+}
+
+func (he *HotspotsExplainer) buildMeasuredFindings(hotspot *FileReport) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("- **%d-line file**", hotspot.Lines))
+	if len(hotspot.Functions) > 0 {
+		sb.WriteString(fmt.Sprintf(" with %d functions", len(hotspot.Functions)))
+	}
+	sb.WriteString(".\n")
+
+	maxName, maxLen := he.findLongestFunction(hotspot)
+	if maxName != "" {
+		sb.WriteString(fmt.Sprintf("- **%s function**: %d lines", maxName, maxLen))
 		if len(hotspot.Functions) > 0 && hotspot.Functions[0].BranchingComplexity > 0 {
-			findings.WriteString(fmt.Sprintf(" with branching complexity of **%d**", hotspot.Functions[0].BranchingComplexity))
+			sb.WriteString(fmt.Sprintf(" with branching complexity of **%d**", hotspot.Functions[0].BranchingComplexity))
 		}
-		findings.WriteString(".\n")
+		sb.WriteString(".\n")
 	}
 
-	// Nesting
 	if len(hotspot.Functions) > 0 && hotspot.Functions[0].MaxNesting > 0 {
-		findings.WriteString(fmt.Sprintf("- Maximum nesting: **%d**.\n", hotspot.Functions[0].MaxNesting))
+		sb.WriteString(fmt.Sprintf("- Maximum nesting: **%d**.\n", hotspot.Functions[0].MaxNesting))
 	}
 
-	// Duplication
 	if hotspot.DuplicationPercent > 0 {
-		findings.WriteString(fmt.Sprintf("- **%.1f%% duplicated** tokens: %d of %d.\n",
+		sb.WriteString(fmt.Sprintf("- **%.1f%% duplicated** tokens: %d of %d.\n",
 			hotspot.DuplicationPercent, hotspot.DuplicateTokens, hotspot.TotalFunctionTokens))
 	}
 
-	// Imports
 	if hotspot.InternalImports > 0 {
-		findings.WriteString(fmt.Sprintf("- Enclosing package imports **%d internal packages**.\n", hotspot.InternalImports))
+		sb.WriteString(fmt.Sprintf("- Enclosing package imports **%d internal packages**.\n", hotspot.InternalImports))
 	}
 
-	exp.MeasuredFindings = findings.String()
+	return sb.String()
+}
 
-	// Why it scores poorly (dimension analysis)
-	var whyPoor strings.Builder
-	whyPoor.WriteString("The code has multiple concerns:\n\n")
+func (he *HotspotsExplainer) buildWhyScorePoorly(hotspot *FileReport) string {
+	var sb strings.Builder
+	sb.WriteString("The code has multiple concerns:\n\n")
 
 	complexity := hotspot.Dimensions.Complexity
 	structure := hotspot.Dimensions.Structure
@@ -142,31 +138,39 @@ func (he *HotspotsExplainer) explainHotspot(hotspot *FileReport) (*Explanation, 
 	coupling := hotspot.Dimensions.Coupling
 
 	if complexity != nil && *complexity < 5 {
-		whyPoor.WriteString(fmt.Sprintf("- **Complexity** (%.1f/10): Too many branches or long sequential logic\n", *complexity))
+		sb.WriteString(fmt.Sprintf("- **Complexity** (%.1f/10): Too many branches or long sequential logic\n", *complexity))
 	}
 	if structure != nil && *structure < 5 {
-		whyPoor.WriteString(fmt.Sprintf("- **Structure** (%.1f/10): Function size or deep nesting\n", *structure))
+		sb.WriteString(fmt.Sprintf("- **Structure** (%.1f/10): Function size or deep nesting\n", *structure))
 	}
 	if duplication != nil && *duplication < 5 {
-		whyPoor.WriteString(fmt.Sprintf("- **Duplication** (%.1f/10): Repeated logic patterns\n", *duplication))
+		sb.WriteString(fmt.Sprintf("- **Duplication** (%.1f/10): Repeated logic patterns\n", *duplication))
 	}
 	if coupling != nil && *coupling < 5 {
-		whyPoor.WriteString(fmt.Sprintf("- **Coupling** (%.1f/10): Too many dependencies\n", *coupling))
+		sb.WriteString(fmt.Sprintf("- **Coupling** (%.1f/10): Too many dependencies\n", *coupling))
 	}
 
-	exp.WhyScorePoorly = whyPoor.String()
+	return sb.String()
+}
 
-	// Suggested improvement
-	exp.SuggestedImprovement = "Extract focused, testable functions for each concern. " +
-		"Separate data transformation from side effects (logging, I/O). " +
-		"Reduce nesting by extracting conditional blocks. " +
-		"Consolidate repeated patterns into helpers.\n"
-
-	// Behavior to preserve (extract from source)
+func (he *HotspotsExplainer) buildBehaviorToPreserve(path string) string {
 	if he.scope == "package" {
-		exp.BehaviorToPreserve = "- Preserve behavior across the package files represented by this hotspot.\n"
-	} else {
-		exp.BehaviorToPreserve = he.extractBehaviorPatterns(hotspot.Path)
+		return "- Preserve behavior across the package files represented by this hotspot.\n"
+	}
+	return he.extractBehaviorPatterns(path)
+}
+
+func (he *HotspotsExplainer) explainHotspot(hotspot *FileReport) (*Explanation, error) {
+	exp := &Explanation{
+		Path:                 hotspot.Path,
+		OverallScore:         hotspot.Score,
+		MeasuredFindings:     he.buildMeasuredFindings(hotspot),
+		WhyScorePoorly:       he.buildWhyScorePoorly(hotspot),
+		SuggestedImprovement: "Extract focused, testable functions for each concern. " +
+			"Separate data transformation from side effects (logging, I/O). " +
+			"Reduce nesting by extracting conditional blocks. " +
+			"Consolidate repeated patterns into helpers.\n",
+		BehaviorToPreserve: he.buildBehaviorToPreserve(hotspot.Path),
 	}
 
 	return exp, nil
