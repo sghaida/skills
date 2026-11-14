@@ -162,8 +162,7 @@ func prepareAnalysisContext(scan ScanContext) (analysisInputs, error) {
 	inputs.duplicationEngine = scan.DuplicationEngine
 	inputs.broadInterfaceThreshold = scan.BroadInterfaceThreshold
 	inputs.module = scan.ModulePath
-	inputs.report = newReport(scan.Root, scan.IncludeTests, scan.IncludeGitChurn,
-		scan.DuplicationEngine, scan.BroadInterfaceThreshold)
+	inputs.report = newReport(scan)
 	return inputs, nil
 }
 
@@ -206,7 +205,12 @@ func completeDuplicationAnalysis(inputs *analysisInputs, parsedFiles []*sourceFi
 
 // postprocessreport handles post process report
 func postProcessReport(report *Report, parsedFiles []*sourceFile, includeGitChurn bool, hasModule bool) error {
-	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, hasModule)
+	policy := scoringPolicy{
+		gotoCheck:        report.Configuration.GotoCheck,
+		maxFunctionLines: report.Configuration.MaxFunctionLines,
+		recursionCheck:   report.Configuration.RecursionCheck,
+	}
+	report.Files, report.Packages, report.Dimensions, report.CodeHealthScore = buildScores(parsedFiles, hasModule, policy)
 	finalizeReport(report)
 	report.Hotspots = topHotspots(report.Files)
 	if includeGitChurn {
@@ -259,11 +263,17 @@ func finalizeDuplicationSummary(files []*sourceFile, engine string, summary *Sum
 }
 
 // newreport handles new report
-func newReport(root string, includeTests, includeGitChurn bool, duplicationEngine string, broadInterfaceThreshold int) Report {
+func newReport(scan ScanContext) Report {
 	return Report{
 		SchemaVersion: "1.0", ScoringVersion: scoringVersion, Language: "go", MaxScore: 10,
-		Configuration: Configuration{IncludeTests: includeTests, IncludeGitChurn: includeGitChurn, DuplicateWindowTokens: 35, DuplicationEngine: duplicationEngine, BroadInterfaceThreshold: broadInterfaceThreshold},
-		Repository:    root, AnalysisStatus: "complete", Packages: []PackageReport{}, Files: []FileReport{},
+		Configuration: Configuration{
+			IncludeTests: scan.IncludeTests, IncludeGitChurn: scan.IncludeGitChurn,
+			DuplicateWindowTokens: 35, DuplicationEngine: scan.DuplicationEngine,
+			BroadInterfaceThreshold: scan.BroadInterfaceThreshold,
+			GotoCheck:               scan.GotoCheck, MaxFunctionLines: scan.MaxFunctionLines,
+			RecursionCheck: scan.RecursionCheck,
+		},
+		Repository: scan.Root, AnalysisStatus: "complete", Packages: []PackageReport{}, Files: []FileReport{},
 		Hotspots: []FileReport{}, Warnings: []string{},
 	}
 }

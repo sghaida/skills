@@ -1,4 +1,4 @@
-# Go Code Health Scoring Model (go-v0.3.0)
+# Go Code Health Scoring Model (go-v0.4.0)
 
 ## Scope and intent
 
@@ -29,8 +29,14 @@ The AST-based **branching complexity** is a custom heuristic, not canonical cogn
 - Explicit `case` or `select` communication clauses: +1 per clause (default clauses excluded).
 - Every boolean `&&` or `||`: +1.
 - Nested closure bodies are independently measured rather than counted in their parent function.
+- `goto_check: true` adds +1 per goto to effective complexity.
+- `recursion_check: true` adds +1 per function with detected direct recursion,
+  not per call site, even when documented. Tail recursion is not exempt.
+  Both checks default to false. Raw counts are always measured.
 
-A function is assigned a component score as follows:
+`effective_complexity = branching_complexity + (goto_check ? goto_count : 0) + (recursion_check && recursive_calls > 0 ? 1 : 0)`
+
+A function is assigned a component score from effective complexity as follows:
 
 | Branching complexity | Function score |
 |---:|---:|
@@ -47,7 +53,13 @@ The file complexity score is **80% length-square-root-weighted mean of its funct
 
 For each function, calculate a penalty:
 
-`min(10, 0.08 × max(0, function_lines − 40) + 1.25 × max(0, nesting_depth − 3))`
+`min(10, 0.08 × max(0, function_lines − max_function_lines) + 1.25 × max(0, nesting_depth − 3))`
+
+`max_function_lines` defaults to 80 and must be a positive integer. No length
+penalty applies at or below that limit; each excess line adds 0.08 before
+the combined function-penalty cap. Function lines are physical lines from the
+declaration through the closing brace, including blank/comment lines but not
+the preceding doc comment.
 
 For the file, calculate:
 
@@ -55,7 +67,34 @@ For the file, calculate:
 
 `structure = clamp(10 − 0.6 × mean(function_penalties) − 0.4 × worst(function_penalties) − file_length_penalty, 0, 10)`
 
-For files without functions, the function penalty is zero. Exceeding 80 function lines, depth 4, or 600 file lines generates an explanatory finding where applicable.
+For files without functions, the function penalty is zero. Exceeding
+`max_function_lines` function lines, depth 4, or 600 file lines generates an
+explanatory finding where applicable.
+
+Version `go-v0.4.0` intentionally moves the length-penalty baseline from half
+the configured limit to the exact limit. Nesting and file-length penalties
+are unchanged. Earlier scores may be lower; old-model caches are invalidated
+through the scoring version.
+
+### Recursion findings
+
+When enabled, detected direct recursion without a non-empty
+`// chnq:recursion <reason>` doc-comment directive produces
+`undocumented-recursion`. A reason suppresses the warning, not the complexity
+contribution. A directive without detected recursion produces a qualified
+`stale-recursion-directive` informational finding.
+
+Only confidently resolved same-file direct calls and current-receiver method
+calls are covered; shadowed names are not self-calls.
+Local generic type/alias parameters are scoped to their type declarations;
+conversions through those parameters are not recursive calls. Receiver
+calls include explicit dereferences and address-taking. Nested closures,
+function-value aliases, explicitly reassigned receivers, other receivers,
+mutual recursion, and interface dispatch are outside coverage. Direct
+goroutine launches are excluded, but their evaluated argument calls are inspected.
+Neither documentation nor finding a base-case return proves termination or
+stack safety. Go provides no guaranteed tail-call optimization. Depth-limit
+verification, SSA integration, and automatic refactoring are deferred.
 
 ### Duplication
 

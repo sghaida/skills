@@ -176,13 +176,13 @@ func complexityForFunction(v int) float64 {
 
 // complexityForFile combines function complexity using a line-weighted average
 // and a smaller contribution from the file's worst-scoring function
-func complexityForFile(f *sourceFile) float64 {
+func complexityForFile(f *sourceFile, policy scoringPolicy) float64 {
 	if len(f.funcs) == 0 {
 		return 10
 	}
 	weighted, totalWeight, worst := 0.0, 0.0, 10.0
 	for _, fn := range f.funcs {
-		score := complexityForFunction(fn.report.BranchingComplexity)
+		score := complexityForFunction(policy.effectiveComplexity(fn.report))
 		weight := math.Sqrt(float64(maxInt(1, fn.report.Lines)))
 		weighted += weight * score
 		totalWeight += weight
@@ -194,14 +194,14 @@ func complexityForFile(f *sourceFile) float64 {
 }
 
 // structureforfile penalizes large files, long functions, and deep nesting
-func structureForFile(f *sourceFile) float64 {
+func structureForFile(f *sourceFile, policy scoringPolicy) float64 {
 	sizePenalty := math.Min(2.5, 0.005*float64(maxInt(0, f.lines-400)))
 	if len(f.funcs) == 0 {
 		return clamp(10 - sizePenalty)
 	}
 	total, worst := 0.0, 0.0
 	for _, fn := range f.funcs {
-		p := math.Min(10, 0.08*float64(maxInt(0, fn.report.Lines-40))+1.25*float64(maxInt(0, fn.report.MaxNesting-3)))
+		p := math.Min(10, 0.08*float64(maxInt(0, fn.report.Lines-policy.maxFunctionLines))+1.25*float64(maxInt(0, fn.report.MaxNesting-3)))
 		total += p
 		if p > worst {
 			worst = p
@@ -241,19 +241,21 @@ func scoreDimensions(d Dimensions) float64 {
 
 // fileScore builds a file report from analyzed metrics and emits threshold
 // findings for complexity, size, duplication, coupling, and nesting
-func fileScore(f *sourceFile, moduleAvailable bool) FileReport {
+func fileScore(f *sourceFile, moduleAvailable bool, policy scoringPolicy) FileReport {
 	duplicateTokens, totalFunctionTokens, dup := duplicationStats(f)
-	d := fileDimensions(f, moduleAvailable, dup)
+	d := fileDimensions(f, moduleAvailable, dup, policy)
 	score := round1(scoreDimensions(d))
 	r := FileReport{
 		Path: f.path, Package: f.packageName, Score: score, Classification: classification(score),
 		Lines: f.lines, Functions: []FunctionReport{}, InternalImports: f.internalImports,
 		DuplicateTokens: duplicateTokens, TotalFunctionTokens: totalFunctionTokens,
 		DuplicationPercent: dup, Dimensions: d, Health: healthMetricsForFile(f),
-		Findings: findingsForFile(f, dup, moduleAvailable),
+		Findings: findingsForFile(f, dup, moduleAvailable, policy),
 	}
 	for _, fn := range f.funcs {
-		r.Functions = append(r.Functions, fn.report)
+		function := fn.report
+		function.EffectiveBranchingComplexity = policy.effectiveComplexity(function)
+		r.Functions = append(r.Functions, function)
 	}
 	sort.Slice(r.Findings, func(i, j int) bool {
 		if r.Findings[i].Line == r.Findings[j].Line {
@@ -288,10 +290,10 @@ func duplicationStats(f *sourceFile) (int, int, float64) {
 }
 
 // filedimensions handles file dimensions
-func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent float64) Dimensions {
+func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent float64, policy scoringPolicy) Dimensions {
 	d := Dimensions{
-		Complexity:          ptr(round1(complexityForFile(f))),
-		Structure:           ptr(round1(structureForFile(f))),
+		Complexity:          ptr(round1(complexityForFile(f, policy))),
+		Structure:           ptr(round1(structureForFile(f, policy))),
 		Duplication:         ptr(round1(clamp(10 - duplicationPercent/10))),
 		CyclicDependencies:  ptr(round1(f.cycleScore)),
 		InterfaceCompliance: ptr(round1(f.interfaceScore)),
@@ -304,17 +306,17 @@ func fileDimensions(f *sourceFile, moduleAvailable bool, duplicationPercent floa
 }
 
 // findingsforfile handles findings for file
-func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable bool) []Finding {
-	findings := findingsForFunctions(f.funcs)
+func findingsForFile(f *sourceFile, duplicationPercent float64, moduleAvailable bool, policy scoringPolicy) []Finding {
+	findings := findingsForFunctions(f.funcs, policy)
 	findings = appendFileFindings(findings, f, duplicationPercent, moduleAvailable)
 	return findings
 }
 
 // findingsforfunctions handles findings for functions
-func findingsForFunctions(functions []*functionData) []Finding {
+func findingsForFunctions(functions []*functionData, policy scoringPolicy) []Finding {
 	findings := make([]Finding, 0)
 	for _, fn := range functions {
-		findings = append(findings, findingsForFunction(fn)...)
+		findings = append(findings, findingsForFunction(fn, policy)...)
 	}
 	return findings
 }
@@ -387,21 +389,23 @@ func appendHealthFindings(findings []Finding, f *sourceFile) []Finding {
 }
 
 // findingsforfunction handles findings for function
-func findingsForFunction(fn *functionData) []Finding {
+func findingsForFunction(fn *functionData, policy scoringPolicy) []Finding {
 	findings := make([]Finding, 0, 3)
-	if fn.report.BranchingComplexity > 15 {
+	complexity := policy.effectiveComplexity(fn.report)
+	if complexity > 15 {
 		severity := "warning"
-		if fn.report.BranchingComplexity > 25 {
+		if complexity > 25 {
 			severity = "high"
 		}
-		findings = append(findings, Finding{"high-complexity", severity, fn.report.Line, "Branching complexity " + itoa(fn.report.BranchingComplexity) + " in " + fn.report.Name})
+		findings = append(findings, Finding{"high-complexity", severity, fn.report.Line, "Branching complexity " + itoa(complexity) + " in " + fn.report.Name})
 	}
-	if fn.report.Lines > 80 {
+	if fn.report.Lines > policy.maxFunctionLines {
 		findings = append(findings, Finding{"long-function", "warning", fn.report.Line, itoa(fn.report.Lines) + " lines in " + fn.report.Name})
 	}
 	if fn.report.MaxNesting > 4 {
 		findings = append(findings, Finding{"deep-nesting", "warning", fn.report.Line, "Nesting depth " + itoa(fn.report.MaxNesting) + " in " + fn.report.Name})
 	}
+	findings = append(findings, recursionAndGotoFindings(fn.report, policy)...)
 	return findings
 }
 
@@ -458,12 +462,15 @@ func dimensionValues(d Dimensions) []*float64 {
 
 // buildScores creates deterministic file and package reports and the overall
 // repository dimensions and score
-func buildScores(files []*sourceFile, hasModule bool) ([]FileReport, []PackageReport, Dimensions, *float64) {
+func buildScores(files []*sourceFile, hasModule bool, policy scoringPolicy) ([]FileReport, []PackageReport, Dimensions, *float64) {
+	if policy.maxFunctionLines == 0 {
+		policy.maxFunctionLines = defaultMaxFunctionLines
+	}
 	results := make([]FileReport, 0, len(files))
 	packages := make(map[string][]FileReport)
 	depCounts := make(map[string]int)
 	for _, f := range files {
-		r := fileScore(f, hasModule)
+		r := fileScore(f, hasModule, policy)
 		results = append(results, r)
 		packages[f.packagePath] = append(packages[f.packagePath], r)
 		depCounts[f.packagePath] = f.packageFanOut

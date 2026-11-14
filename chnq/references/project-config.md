@@ -31,7 +31,10 @@ Projects can store their code-health policy in a checked-in
     "maximum_git_churn": 2000
   },
   "include_tests": false,
-  "broad_interface_threshold": 5
+  "broad_interface_threshold": 5,
+  "goto_check": true,
+  "max_function_lines": 60,
+  "recursion_check": true
 }
 ```
 
@@ -52,7 +55,66 @@ Projects can store their code-health policy in a checked-in
   the threshold.
 - `include_tests` defaults to `false` when omitted.
 - `broad_interface_threshold` controls how many methods make an interface
-  broad. It defaults to `5` when omitted and must be a positive integer.
+  broad. It defaults to `5` when omitted; the legacy parser also falls back
+  to `5` for non-positive integers.
+- `goto_check` defaults to `false`. When enabled, each goto contributes +1
+  effective branching complexity and a per-function `goto-usage` warning.
+  Labeled breaks/continues and fallthrough do not count.
+- `max_function_lines` defaults to `80`; an explicitly configured value must
+  be a positive integer. The long-function finding fires above this limit;
+  the structure length penalty also begins above that same limit.
+- `recursion_check` defaults to `false`. When enabled, each function with
+  detected direct recursion contributes +1 complexity total and needs a
+  non-empty `chnq:recursion` justification in its doc comment.
+- The three new keys reject explicit nulls and invalid types. Missing keys
+  use the documented defaults. In `go-v0.4.0`, length penalties start above
+  the configured limit rather than half of it; scores may improve relative
+  to the previous model.
+
+The binary directly reads the duplication engine, broad-interface threshold,
+and the three new scoring settings. Other fields are agent/CI policy:
+pass `--include-tests` for `include_tests: true`, pass `--fail-under` for the
+overall minimum, and compare dimension/health gates separately. JSON minimums
+do not automatically change the binary's exit status.
+
+See the [complete configuration example and calculations](../../README.md#project-policy-and-required-health-gate)
+and [scoring model](scoring-model.md) for formulas.
+
+## Recursion policy
+
+```go
+// chnq:recursion Recursive traversal is clearer than an explicit stack.
+// A runtime depth guard rejects excessive nesting with an error.
+func walk(n *Node, depth int) error { /* application implementation */ }
+```
+
+Both tail and non-tail detected direct recursion require documentation when
+enabled. Missing/empty reasons produce `undocumented-recursion` (warning),
+suggesting an iterative implementation or justification. A reason suppresses
+only that warning, not the +1 complexity contribution. A directive with no
+detected recursion produces `stale-recursion-directive` (info), qualified by
+the checker's detection limits.
+
+Reasons should explain why recursion is preferable and how excessive depth
+is handled. Only presence is checked, never truthfulness or runtime safety.
+Detection uses syntax-based lexical scopes for functions (including
+generic functions) and current-receiver calls, without type-checking or
+loading dependencies. Explicit receiver dereferences (`(*r).f()`) and
+address-taking (`(&r).f()`) are recognized. Local generic type/alias
+parameters shadow names only within their type declarations. Explicitly
+reassigned receivers are conservatively excluded. It does not cover nested
+closures, function-value aliases, other receivers, mutual recursion, or
+interface dispatch. Direct goroutine launches are not stack recursion;
+self-calls in their evaluated arguments still count. Go provides no
+guaranteed tail-call optimization.
+
+Termination and depth bounds are not assessed. Runtime guards, when needed,
+must return errors and be tested in application code. There is no
+`max_recursion_depth` setting, SSA integration, or automatic rewrite.
+
+Policy changes invalidate cached reports. Raw goto/recursion facts are
+always measured and kept in reusable snapshots; policy-dependent scoring is
+recomputed, so toggling checks cannot reuse stale scores.
 
 The policy applies to the complete scan of the configured project scope.
 `minimum_score` is compared with `code_health_score`; each configured
@@ -67,8 +129,8 @@ directions described below.
 
 ### Overall score
 
-- **`minimum_score`** is the project's overall health target. It combines all
-  available metrics into one score from 0 to 10. A low score means the code
+- **`minimum_score`** is the project's overall health target. It combines the
+  four weighted dimensions into one score from 0 to 10. A low score means the code
   needs structural improvement in one or more areas.
 - **Example:** A minimum of `8.0` means the project must have an overall score
   of at least 8.0, even if some individual metrics are stronger than others.
@@ -178,13 +240,18 @@ of a passing result.
 
 ### Package dependency health
 
-- **`maximum_import_cycles`** limits packages participating in internal import
-  cycles. `0` is recommended.
+- **`maximum_import_cycles`** limits analyzed files whose packages participate
+  in internal import cycles. `0` is recommended.
 - **`maximum_dependency_depth`** limits the longest internal dependency chain
   observed for a package.
 - **`maximum_incoming_dependencies`** limits package fan-in. High fan-in can
   indicate a central package whose changes affect much of the repository, but
   it is not automatically a defect.
+
+Currently `summary.health.dependency_depth` and `incoming_dependencies` are
+not aggregated and remain zero. For meaningful gates on these two metrics,
+compare file/package measurements explicitly (for example their maximum).
+Do not treat zero summary fields as proof of no dependencies.
 
 ### Git churn
 

@@ -12,7 +12,7 @@ import (
 
 // analysisRevision invalidates cached reports when analysis logic changes
 // measured results without a scoring-model version bump.
-const analysisRevision = "1"
+const analysisRevision = "4"
 
 // defaultCacheFileName is resolved against the analyzed project root when the
 // --cache-file flag is left at its default value.
@@ -30,6 +30,9 @@ type ScanContext struct {
 	DuplicationEngine       string
 	EngineIdentity          string
 	BroadInterfaceThreshold int
+	GotoCheck               bool
+	MaxFunctionLines        int
+	RecursionCheck          bool
 	ConfigHash              string
 	GitRefsHash             string
 }
@@ -75,6 +78,9 @@ func resolveScanPolicy(scan *ScanContext) error {
 	}
 	scan.DuplicationEngine = engine
 	scan.BroadInterfaceThreshold = config.BroadInterfaceThreshold
+	scan.GotoCheck = config.GotoCheck
+	scan.MaxFunctionLines = config.MaxFunctionLines
+	scan.RecursionCheck = config.RecursionCheck
 	scan.ConfigHash = configFingerprint(raw, present)
 	scan.EngineIdentity, err = resolveEngineIdentity(engine)
 	return err
@@ -138,6 +144,9 @@ func (c ScanContext) Fingerprint() string {
 		"engine:" + c.DuplicationEngine,
 		"engine_identity:" + c.EngineIdentity,
 		"broad_interface_threshold:" + strconv.Itoa(c.BroadInterfaceThreshold),
+		"goto_check:" + strconv.FormatBool(c.GotoCheck),
+		"max_function_lines:" + strconv.Itoa(c.MaxFunctionLines),
+		"recursion_check:" + strconv.FormatBool(c.RecursionCheck),
 		"config:" + c.ConfigHash,
 		"git_refs:" + c.GitRefsHash,
 	} {

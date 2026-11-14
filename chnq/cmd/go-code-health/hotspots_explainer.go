@@ -103,6 +103,12 @@ func (he *HotspotsExplainer) buildMeasuredFindings(hotspot *FileReport) string {
 	writeNestingFinding(&sb, hotspot)
 	writeDuplicationFinding(&sb, hotspot)
 	writeImportFinding(&sb, hotspot)
+	for _, finding := range hotspot.Findings {
+		switch finding.Rule {
+		case "goto-usage", "undocumented-recursion", "stale-recursion-directive":
+			_, _ = fmt.Fprintf(&sb, "- **%s**: %s.\n", finding.Rule, finding.Message)
+		}
+	}
 	return sb.String()
 }
 
@@ -122,8 +128,15 @@ func writeFunctionFinding(sb *strings.Builder, hotspot *FileReport) {
 		return
 	}
 	_, _ = fmt.Fprintf(sb, "- **%s function**: %d lines", maxName, maxLen)
-	if len(hotspot.Functions) > 0 && hotspot.Functions[0].BranchingComplexity > 0 {
-		_, _ = fmt.Fprintf(sb, " with branching complexity of **%d**", hotspot.Functions[0].BranchingComplexity)
+	for _, fn := range hotspot.Functions {
+		if fn.Name != maxName || fn.Lines != maxLen {
+			continue
+		}
+		complexity := maxInt(fn.BranchingComplexity, fn.EffectiveBranchingComplexity)
+		if complexity > 0 {
+			_, _ = fmt.Fprintf(sb, " with branching complexity of **%d**", complexity)
+		}
+		break
 	}
 	sb.WriteString(".\n")
 }
@@ -310,6 +323,7 @@ func addHotspotFile(groups map[string]*hotspotAggregate, file FileReport) {
 	group.report.DuplicateTokens += file.DuplicateTokens
 	group.report.TotalFunctionTokens += file.TotalFunctionTokens
 	group.report.Functions = append(group.report.Functions, file.Functions...)
+	group.report.Findings = append(group.report.Findings, file.Findings...)
 	group.report.Health.IgnoredReturnValues += file.Health.IgnoredReturnValues
 	group.report.Health.Panics += file.Health.Panics
 	group.report.Health.TODOs += file.Health.TODOs

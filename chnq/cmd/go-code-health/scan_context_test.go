@@ -66,11 +66,14 @@ func TestFingerprintChangesWithSemanticInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	variants := []ScanContext{base, base, base, base, base}
+	variants := []ScanContext{base, base, base, base, base, base, base, base}
 	variants[1].IncludeTests = true
 	variants[2].IncludeGitChurn = true
 	variants[3].ConfigHash = "other"
 	variants[4].GitRefsHash = "refs"
+	variants[5].GotoCheck = true
+	variants[6].MaxFunctionLines = 60
+	variants[7].RecursionCheck = true
 	seen := map[string]bool{}
 	for i, variant := range variants {
 		fingerprint := variant.Fingerprint()
