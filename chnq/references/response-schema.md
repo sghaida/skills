@@ -5,7 +5,7 @@
 | Field | Type | Description |
 |---|---|---|
 | `schema_version` | string | Output contract version, currently `1.0` |
-| `scoring_version` | string | Formula identifier, currently `go-v0.3.0` |
+| `scoring_version` | string | Formula identifier, currently `go-v0.4.0` |
 | `language` | string | Always `go` in this implementation |
 | `max_score` | number | Always 10 |
 | `repository` | string | Absolute filesystem path scanned |
@@ -18,10 +18,18 @@
 | `files` | array | Per-file score, function measurements, duplication, health measurements, and findings |
 | `hotspots` | array | Up to 5 lowest-scoring files under 8, with their full details |
 | `git_hotspots` | array | Present with `--include-git-churn`; up to 5 files with the most changed lines |
-| `configuration` | object | Include-tests, Git churn, duplication window, engine, and broad-interface threshold settings |
+| `configuration` | object | Include-tests, Git churn, duplication window, engine, broad-interface threshold, `goto_check`, `max_function_lines`, and `recursion_check` settings |
 | `warnings` | array | Analysis warnings, including missing `go.mod` or parse failures |
 
 `files[].functions[]` includes names, starting line, source line count, `branching_complexity`, and `max_nesting`. `files[].findings[]` includes `rule`, `severity`, optional `line`, and `message`. `files[].dimensions` is the same seven-dimension breakdown as the repository. The three architecture dimensions are reported independently and do not change `code_health_score`.
+
+Function records also include nonzero `goto_count`, `recursive_calls`, and
+`effective_branching_complexity`, plus `recursion_directive` and
+`recursion_justified` when true. Zero/false values for these additive fields
+are omitted. Raw counts are policy-independent; effective complexity includes
+enabled goto and recursion contributions. Raw `branching_complexity` keeps
+its original meaning. Justification flags describe comment presence, not a
+termination or depth-safety assessment.
 
 The `health` object includes exported symbols, documentation coverage,
 discarded return values, panics, TODO/FIXME markers, goroutines, channel

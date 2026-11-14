@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const scoringVersion = "go-v0.3.0"
+const scoringVersion = "go-v0.4.0"
 
 // dimensions contains the analyzer's four maintainability dimension scores
 type Dimensions struct {
@@ -59,11 +59,16 @@ type Finding struct {
 
 // functionreport contains measured metrics for one go function
 type FunctionReport struct {
-	Name                string `json:"name"`
-	Line                int    `json:"line"`
-	Lines               int    `json:"lines"`
-	BranchingComplexity int    `json:"branching_complexity"`
-	MaxNesting          int    `json:"max_nesting"`
+	Name                         string `json:"name"`
+	Line                         int    `json:"line"`
+	Lines                        int    `json:"lines"`
+	BranchingComplexity          int    `json:"branching_complexity"`
+	MaxNesting                   int    `json:"max_nesting"`
+	GotoCount                    int    `json:"goto_count,omitempty"`
+	RecursiveCalls               int    `json:"recursive_calls,omitempty"`
+	RecursionDirective           bool   `json:"recursion_directive,omitempty"`
+	RecursionJustified           bool   `json:"recursion_justified,omitempty"`
+	EffectiveBranchingComplexity int    `json:"effective_branching_complexity,omitempty"`
 }
 
 // filereport contains measured metrics and findings for one go source file
@@ -115,6 +120,9 @@ type Configuration struct {
 	DuplicateWindowTokens   int    `json:"duplicate_window_tokens"`
 	DuplicationEngine       string `json:"duplication_engine"`
 	BroadInterfaceThreshold int    `json:"broad_interface_threshold"`
+	GotoCheck               bool   `json:"goto_check"`
+	MaxFunctionLines        int    `json:"max_function_lines"`
+	RecursionCheck          bool   `json:"recursion_check"`
 }
 
 // report is the complete json-serializable analyzer result

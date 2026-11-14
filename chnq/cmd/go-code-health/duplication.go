@@ -28,6 +28,9 @@ func errMissingJSCPD() error {
 type projectConfig struct {
 	DuplicationEngine       string `json:"duplication_engine"`
 	BroadInterfaceThreshold int    `json:"broad_interface_threshold"`
+	GotoCheck               bool   `json:"goto_check"`
+	MaxFunctionLines        int    `json:"max_function_lines"`
+	RecursionCheck          bool   `json:"recursion_check"`
 }
 
 // jscpdstatistic represents jscpd statistic data
@@ -87,12 +90,27 @@ func readProjectConfig(root string) ([]byte, bool, error) {
 
 // parseProjectConfig decodes policy bytes, applying defaults when absent.
 func parseProjectConfig(data []byte, configPath string) (projectConfig, error) {
-	if data == nil {
-		return projectConfig{BroadInterfaceThreshold: defaultBroadInterfaceThreshold}, nil
+	config := projectConfig{
+		BroadInterfaceThreshold: defaultBroadInterfaceThreshold,
+		MaxFunctionLines:        defaultMaxFunctionLines,
 	}
-	var config projectConfig
+	if data == nil {
+		return config, nil
+	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return projectConfig{}, fmt.Errorf("parse %s: %w", configPath, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return projectConfig{}, fmt.Errorf("parse %s: %w", configPath, err)
+	}
+	for _, key := range []string{"goto_check", "max_function_lines", "recursion_check"} {
+		if string(fields[key]) == "null" {
+			return projectConfig{}, fmt.Errorf("parse %s: %s must not be null", configPath, key)
+		}
+	}
+	if config.MaxFunctionLines < 1 {
+		return projectConfig{}, fmt.Errorf("parse %s: max_function_lines must be a positive integer", configPath)
 	}
 	if config.BroadInterfaceThreshold < 1 {
 		config.BroadInterfaceThreshold = defaultBroadInterfaceThreshold

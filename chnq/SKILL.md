@@ -107,6 +107,22 @@ Score the Go source code using the bundled analyzer. **Never estimate a score yo
     `--hotspots-scope package` to aggregate low-scoring files by enclosing
     package. These explanations are generated from measured report data and
     source patterns; an LLM is not required.
+20. Respect `goto_check`, `max_function_lines`, and `recursion_check` in the
+    project policy. Gotos add +1 each when enabled; direct recursion adds +1
+    per recursive function when enabled, not per call site. Both checks
+    default to false. Function length defaults to 80 lines, with structure
+    length penalties and long-function warnings starting above that same limit.
+    See [the scoring model](references/scoring-model.md) for exact formulas.
+21. When recursion checking is enabled, both tail and non-tail detected
+    direct recursion need a non-empty `// chnq:recursion <reason>` doc-comment
+    directive. Suggest iteration or documenting why recursion is preferable
+    and how excessive depth is handled. A reason suppresses the documentation
+    warning, never the complexity contribution. Validate the reason through
+    review and tests; the analyzer checks presence only. Detection excludes
+    indirect calls, nested closures, and ambiguous targets. Go provides no
+    guaranteed tail-call optimization. Do not claim that detected base cases
+    or comments prove termination or depth safety, invent a
+    `max_recursion_depth` setting, or automatically rewrite recursion.
 
 ## Run
 

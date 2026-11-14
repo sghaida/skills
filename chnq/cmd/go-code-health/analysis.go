@@ -73,7 +73,7 @@ func lineCount(src []byte) int {
 // scango handles scan go
 func scanGo(path, relativePath string, src []byte) (*sourceFile, error) {
 	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	parsed, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +117,9 @@ func collectFunctionDeclarations(f *sourceFile, fset *token.FileSet, src []byte,
 			name = "method:" + name
 		}
 		appendFunctionData(f, fset, src, name, fn.Body, fn.Pos(), fn.End())
+		if fn.Body != nil {
+			collectRecursionMetrics(fn, &f.funcs[len(f.funcs)-1].report)
+		}
 	}
 }
 
@@ -150,6 +153,7 @@ func appendFunctionData(f *sourceFile, fset *token.FileSet, src []byte, name str
 			Lines:               endLine - line + 1,
 			BranchingComplexity: complexity,
 			MaxNesting:          depth,
+			GotoCount:           countGotos(body),
 		},
 		tokens: tokens,
 	})

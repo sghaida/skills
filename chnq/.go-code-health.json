@@ -12,5 +12,8 @@
     "duck_typing": 9.0
   },
   "broad_interface_threshold": 5,
+  "goto_check": false,
+  "max_function_lines": 80,
+  "recursion_check": false,
   "include_tests": false
 }
