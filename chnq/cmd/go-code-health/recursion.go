@@ -79,11 +79,29 @@ func isSelfCall(expr ast.Expr, fn *ast.FuncDecl, receiver *ast.Ident, bindings *
 	case *ast.Ident:
 		return fn.Recv == nil && callee.Name == fn.Name.Name && !bindings.shadowed(callee.Pos())
 	case *ast.SelectorExpr:
-		base, ok := ast.Unparen(callee.X).(*ast.Ident)
-		return ok && receiver != nil && base.Name == receiver.Name &&
+		base := recursionReceiverBase(callee.X)
+		return base != nil && receiver != nil && base.Name == receiver.Name &&
 			!bindings.shadowed(base.Pos()) && callee.Sel.Name == fn.Name.Name
 	default:
 		return false
+	}
+}
+
+func recursionReceiverBase(expr ast.Expr) *ast.Ident {
+	for {
+		switch base := ast.Unparen(expr).(type) {
+		case *ast.Ident:
+			return base
+		case *ast.StarExpr:
+			expr = base.X
+		case *ast.UnaryExpr:
+			if base.Op != token.AND {
+				return nil
+			}
+			expr = base.X
+		default:
+			return nil
+		}
 	}
 }
 

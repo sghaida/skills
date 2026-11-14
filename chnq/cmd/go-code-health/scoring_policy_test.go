@@ -31,6 +31,11 @@ func TestRecursionDetection(t *testing.T) {
 		{"named-result", "func f() (f func()) { f(); return }", 0},
 		{"type-parameter", "func f[f ~int]() { _ = f(0) }", 0},
 		{"local-type", "func f() { { type f int; _ = f(0) }; f() }", 1},
+		{"local-generic-type", "func f() { type G[f ~int] [len([1]f{f(0)})]int; _ = G[int]{} }", 0},
+		{"local-generic-type-scope", "func f() { type G[f ~int] [len([1]f{f(0)})]int; _ = G[int]{}; f() }", 1},
+		{"local-generic-alias", "func f() { type G[f ~int] = [len([1]f{f(0)})]int; _ = G[int]{}; f() }", 1},
+		{"local-generic-constraint", "func f() { type G[P ~[len([1]f{f(0)})]int, f ~int] struct{}; _ = G[[1]int, int]{} }", 0},
+		{"local-generic-group", "func f() { type (G[f ~int] [len([1]f{f(0)})]int; H func()); _ = G[int]{}; _ = H(f); f() }", 1},
 		{"local-const", "func f() { { const f = 1; _ = f }; f() }", 1},
 		{"if-scope", "func f() func() { if f := f(); f != nil { f() } else { f() }; return f() }", 2},
 		{"for-scope", "func f() func() { for f := f(); f != nil; f = nil { f() }; return f() }", 2},
@@ -45,6 +50,17 @@ func TestRecursionDetection(t *testing.T) {
 		{"async-argument", "func f(n int) int { go g(f(n)); return n }; func g(n int) {}", 1},
 		{"method", "type T struct{}; func (r *T) f() { r.f() }", 1},
 		{"method-parenthesized", "type T struct{}; func (r T) f() { (r).f() }", 1},
+		{"method-dereferenced", "type T struct{}; func (r *T) f() { (*r).f() }", 1},
+		{"method-addressed", "type T struct{}; func (r T) f() { (&r).f() }", 1},
+		{"method-nested-dereference", "type T struct{}; func (r T) f() { (*(&r)).f() }", 1},
+		{"method-nested-address", "type T struct{}; func (r *T) f() { (&(*r)).f() }", 1},
+		{"method-other-dereferenced", "type T struct{}; func (r *T) f(other *T) { (*other).f(other) }", 0},
+		{"method-other-addressed", "type T struct{}; func (r T) f(other T) { (&other).f(other) }", 0},
+		{"method-dereferenced-shadow", "type T struct{}; func (r *T) f() { { r := &T{}; (*r).f() }; (*r).f() }", 1},
+		{"method-addressed-shadow", "type T struct{}; func (r T) f() { { r := T{}; (&r).f() }; (&r).f() }", 1},
+		{"method-dereferenced-reassigned", "type T struct{}; func (r *T) f(other *T) { r = other; (*r).f(other) }", 0},
+		{"method-addressed-reassigned", "type T struct{}; func (r T) f(other T) { r = other; (&r).f(other) }", 0},
+		{"method-other-unary", "type T int; func (r T) f() { (-r).f() }", 0},
 		{"method-other-receiver", "type T struct{}; func (r T) f(other T) { other.f() }", 0},
 		{"method-shadow", "type T struct{}; func (r T) f() { { r := T{}; r.f() } }", 0},
 		{"method-shadow-then-self", "type T struct{}; func (r T) f() { { r := T{}; r.f() }; r.f() }", 1},
@@ -72,6 +88,50 @@ func TestRecursionDetection(t *testing.T) {
 			}
 			if got := file.funcs[0].report.RecursiveCalls; got != tt.want {
 				t.Fatalf("recursive call count = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecursionPolicyAfterBindingResolution(t *testing.T) {
+	tests := []struct {
+		name  string
+		code  string
+		calls int
+		rule  string
+	}{
+		{"dereference", "type T struct{}; func (r *T) f() { (*r).f() }", 1, "undocumented-recursion"},
+		{"address", "type T struct{}; func (r T) f() { (&r).f() }", 1, "undocumented-recursion"},
+		{"documented-dereference", "type T struct{}\n// chnq:recursion Bounded tree traversal.\nfunc (r *T) f() { (*r).f() }", 1, ""},
+		{"documented-address", "type T struct{}\n// chnq:recursion Bounded tree traversal.\nfunc (r T) f() { (&r).f() }", 1, ""},
+		{"conversion", "func f() { type G[f ~int] [len([1]f{f(0)})]int; _ = G[int]{} }", 0, ""},
+		{"documented-conversion", "// chnq:recursion Bounded tree traversal.\nfunc f() { type G[f ~int] [len([1]f{f(0)})]int; _ = G[int]{} }", 0, "stale-recursion-directive"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := scanGo("fixture.go", "fixture.go", []byte("package demo\n"+tt.code))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fn := file.funcs[0].report
+			if fn.RecursiveCalls != tt.calls {
+				t.Fatalf("recursive call count = %d, want %d", fn.RecursiveCalls, tt.calls)
+			}
+			policy := scoringPolicy{recursionCheck: true, maxFunctionLines: 80}
+			wantComplexity := fn.BranchingComplexity
+			if tt.calls > 0 {
+				wantComplexity++
+			}
+			if got := policy.effectiveComplexity(fn); got != wantComplexity {
+				t.Fatalf("effective complexity = %d, want %d", got, wantComplexity)
+			}
+			findings := recursionAndGotoFindings(fn, policy)
+			if tt.rule == "" {
+				if len(findings) != 0 {
+					t.Fatalf("unexpected findings: %+v", findings)
+				}
+			} else if len(findings) != 1 || findings[0].Rule != tt.rule {
+				t.Fatalf("findings = %+v, want %s", findings, tt.rule)
 			}
 		})
 	}
@@ -248,6 +308,17 @@ func TestPolicyConfiguration(t *testing.T) {
 
 func TestPolicySnapshotsAndCacheParity(t *testing.T) {
 	p := newParityProject(t)
+	p.write("receiver.go", `package demo
+type T struct{}
+func (r *T) walk() { (*r).walk() }
+func (r T) visit() { (&r).visit() }
+`)
+	p.write("conversion.go", `package demo
+func convert() {
+	type G[convert ~int] [len([1]convert{convert(0)})]int
+	_ = G[int]{}
+}
+`)
 	p.write("f.go", `package demo
 // chnq:recursion Recursive traversal is clearer; callers bound depth.
 func f(n int) int {
@@ -296,7 +367,20 @@ again:
 	if err := json.Unmarshal(encoded, &restored); err != nil || !reflect.DeepEqual(restored, cache.Snapshots["f.go"]) {
 		t.Fatalf("snapshot JSON round trip: %v", err)
 	}
-	cache.AnalysisRevision = "2"
+	for _, fn := range cache.Snapshots["receiver.go"].Functions {
+		if fn.Report.RecursiveCalls != 1 {
+			t.Fatalf("receiver snapshot must retain recursion: %+v", fn.Report)
+		}
+	}
+	if fn := cache.Snapshots["conversion.go"].Functions[0].Report; fn.RecursiveCalls != 0 {
+		t.Fatalf("conversion snapshot must not report recursion: %+v", fn)
+	}
+	for i := range cache.Snapshots["receiver.go"].Functions {
+		cache.Snapshots["receiver.go"].Functions[i].Report.RecursiveCalls = 0
+	}
+	cache.Snapshots["conversion.go"].Functions[0].Report.RecursiveCalls = 1
+	cache.AnalysisRevision = "3"
+	cache.ContextHash = "analysis-revision-3"
 	data, err := json.Marshal(cache)
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +389,7 @@ again:
 	if p.cacheMgr.ReusableCache() != nil {
 		t.Fatal("old analysis snapshots must not be reused")
 	}
+	p.assertParity("analysis revision change")
 }
 
 func TestPolicyReportAndHotspotExplanations(t *testing.T) {

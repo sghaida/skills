@@ -368,13 +368,16 @@ excessive depth is handled.
 Detection uses syntax-based lexical scopes to avoid confusing shadowed
 names with self-calls, without type-checking or loading dependencies. It
 supports plain and generic functions and calls on the current receiver,
-conservatively excluding receivers with explicit reassignment. Nested
-closures, indirect/mutual recursion, aliases, calls on other receivers, and
-interface dispatch are outside coverage. A direct
-`go f()` launch is not counted as stack recursion, although recursive calls
-evaluated in its arguments are counted. The analyzer does not type-check the
-project or prove termination, depth bounds, or stack safety. Go provides no
-guaranteed tail-call optimization. There is deliberately no
+including explicit dereferences (`(*r).f()`) and address-taking (`(&r).f()`).
+Type parameters of local generic types and aliases shadow enclosing names
+only within their type declarations. Receivers with explicit reassignment
+are conservatively excluded. Nested closures, indirect/mutual recursion,
+function-value aliases, calls on other receivers, and interface dispatch
+are outside coverage. A direct `go f()` launch is not counted as stack
+recursion, although recursive calls evaluated in its arguments are counted.
+The analyzer does not type-check the project or prove termination, depth
+bounds, or stack safety. Go provides no guaranteed tail-call optimization.
+There is deliberately no
 `max_recursion_depth` analyzer setting or automatic rewrite.
 
 All scoring policy values appear in report `configuration`. Policy changes

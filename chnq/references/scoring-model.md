@@ -85,10 +85,13 @@ contribution. A directive without detected recursion produces a qualified
 `stale-recursion-directive` informational finding.
 
 Only confidently resolved same-file direct calls and current-receiver method
-calls are covered; shadowed names are not self-calls. Nested closures,
-aliases, explicitly reassigned receivers, other receivers, mutual recursion,
-and interface dispatch are outside coverage. Direct goroutine launches are
-excluded, but their evaluated argument calls are inspected.
+calls are covered; shadowed names are not self-calls.
+Local generic type/alias parameters are scoped to their type declarations;
+conversions through those parameters are not recursive calls. Receiver
+calls include explicit dereferences and address-taking. Nested closures,
+function-value aliases, explicitly reassigned receivers, other receivers,
+mutual recursion, and interface dispatch are outside coverage. Direct
+goroutine launches are excluded, but their evaluated argument calls are inspected.
 Neither documentation nor finding a base-case return proves termination or
 stack safety. Go provides no guaranteed tail-call optimization. Depth-limit
 verification, SSA integration, and automatic refactoring are deferred.

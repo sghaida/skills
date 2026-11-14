@@ -99,11 +99,14 @@ Reasons should explain why recursion is preferable and how excessive depth
 is handled. Only presence is checked, never truthfulness or runtime safety.
 Detection uses syntax-based lexical scopes for functions (including
 generic functions) and current-receiver calls, without type-checking or
-loading dependencies; explicitly reassigned receivers are conservatively
-excluded. It does not cover nested closures,
-aliases, other receivers, mutual recursion, or interface dispatch. Direct
-goroutine launches are not stack recursion; self-calls in their evaluated
-arguments still count. Go provides no guaranteed tail-call optimization.
+loading dependencies. Explicit receiver dereferences (`(*r).f()`) and
+address-taking (`(&r).f()`) are recognized. Local generic type/alias
+parameters shadow names only within their type declarations. Explicitly
+reassigned receivers are conservatively excluded. It does not cover nested
+closures, function-value aliases, other receivers, mutual recursion, or
+interface dispatch. Direct goroutine launches are not stack recursion;
+self-calls in their evaluated arguments still count. Go provides no
+guaranteed tail-call optimization.
 
 Termination and depth bounds are not assessed. Runtime guards, when needed,
 must return errors and be tested in application code. There is no

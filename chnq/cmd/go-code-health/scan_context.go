@@ -12,7 +12,7 @@ import (
 
 // analysisRevision invalidates cached reports when analysis logic changes
 // measured results without a scoring-model version bump.
-const analysisRevision = "3"
+const analysisRevision = "4"
 
 // defaultCacheFileName is resolved against the analyzed project root when the
 // --cache-file flag is left at its default value.

@@ -26,20 +26,20 @@ func collectRecursionBindings(fn *ast.FuncDecl, receiver *ast.Ident) *recursionB
 	if receiver != nil {
 		bindings.name = receiver.Name
 	}
-	bindings.shadowFields(fn.Type.TypeParams, fn.Body)
-	bindings.shadowFields(fn.Type.Params, fn.Body)
-	bindings.shadowFields(fn.Type.Results, fn.Body)
+	bindings.shadowFields(fn.Type.TypeParams, fn.Body.Pos(), fn.Body.End())
+	bindings.shadowFields(fn.Type.Params, fn.Body.Pos(), fn.Body.End())
+	bindings.shadowFields(fn.Type.Results, fn.Body.Pos(), fn.Body.End())
 	ast.Walk(recursionBindingVisitor{bindings: bindings, scope: fn.Body}, fn.Body)
 	return bindings
 }
 
-func (b *recursionBindings) shadowFields(fields *ast.FieldList, body *ast.BlockStmt) {
+func (b *recursionBindings) shadowFields(fields *ast.FieldList, start, end token.Pos) {
 	if fields == nil {
 		return
 	}
 	for _, field := range fields.List {
 		for _, name := range field.Names {
-			b.add(name, body.Pos(), body.End())
+			b.add(name, start, end)
 		}
 	}
 }
@@ -98,9 +98,10 @@ func (v recursionBindingVisitor) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.TypeSpec:
 		v.bindings.add(n.Name, n.Name.Pos(), v.scope.End())
+		v.bindings.shadowFields(n.TypeParams, n.Name.End(), n.End())
 	case *ast.FuncLit:
-		v.bindings.shadowFields(n.Type.Params, n.Body)
-		v.bindings.shadowFields(n.Type.Results, n.Body)
+		v.bindings.shadowFields(n.Type.Params, n.Body.Pos(), n.Body.End())
+		v.bindings.shadowFields(n.Type.Results, n.Body.Pos(), n.Body.End())
 	}
 	return v
 }
