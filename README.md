@@ -487,29 +487,29 @@ For policy configuration, see the simple engineer-facing examples in
 The equations below define the scoring functions, not Go function names.
 Let:
 
-- $R(x)$ mean round to one decimal place.
-- $\operatorname{clamp}(x)=\min(10,\max(0,x))$.
-- $n$ be the number of functions, $L_i$ function $i$'s physical lines,
-  and $N_i$ its maximum nesting depth.
-- $F$ be the file's physical lines and $T$ the configured
+- $`R(x)`$ denote rounding to one decimal place.
+- $`\mathrm{clamp}(x)=\min(10,\max(0,x))`$.
+- $`n`$ be the number of functions, $`L_i`$ function $`i`$'s physical lines,
+  and $`N_i`$ its maximum nesting depth.
+- $`F`$ be the file's physical lines and $`T`$ the configured
   `max_function_lines`.
 
 ##### Complexity equation
 
-For each function, raw complexity $b_i$ is the sum of `1 + enclosing depth`
+For each function, raw complexity $`b_i`$ is the sum of `1 + enclosing depth`
 for each control-flow statement, plus one per non-default case/communication
-clause and one per `&&`/`||`. Let $g_i$ be its goto count and $r_i$ its
+clause and one per `&&`/`||`. Let $`g_i`$ be its goto count and $`r_i`$ its
 detected recursive call-site count. The effective count is:
 
-$$
+```math
 e_i=b_i+I_g g_i+I_r\mathbf{1}_{r_i>0}
-$$
+```
 
-Here $I_g$ and $I_r$ are 1 when their respective checks are enabled,
-otherwise 0; $\mathbf{1}_{r_i>0}$ is 1 if recursion is detected, otherwise 0.
+Here $`I_g`$ and $`I_r`$ are 1 when their respective checks are enabled,
+otherwise 0; $`\mathbf{1}_{r_i>0}`$ is 1 if recursion is detected, otherwise 0.
 The function's complexity score is:
 
-$$
+```math
 c(e)=
 \begin{cases}
 10 & 0\le e\le5\\
@@ -519,40 +519,40 @@ c(e)=
 2 & 25<e\le40\\
 0 & e>40
 \end{cases}
-$$
+```
 
 The file complexity score is:
 
-$$
-C=R\left(\operatorname{clamp}\left(
+```math
+C=R\left(\mathrm{clamp}\left(
 0.8\frac{\sum_{i=1}^{n}\sqrt{\max(1,L_i)}\,c(e_i)}
          {\sum_{i=1}^{n}\sqrt{\max(1,L_i)}}
 +0.2\min_i c(e_i)\right)\right)
-$$
+```
 
 Thus 80% comes from the weighted average and 20% from the worst score.
-A file with no functions has $C=10$.
+A file with no functions has $`C=10`$.
 
 ##### Structure equation
 
 Each function's penalty is:
 
-$$
+```math
 p_i=\min\left(10,\;
 0.08\max(0,L_i-T)+1.25\max(0,N_i-3)\right)
-$$
+```
 
 The file-length penalty and final structure score are:
 
-$$
+```math
 p_F=\min(2.5,\;0.005\max(0,F-400))
-$$
+```
 
-$$
-S=R\left(\operatorname{clamp}\left(
+```math
+S=R\left(\mathrm{clamp}\left(
 10-0.6\frac{\sum_{i=1}^{n}p_i}{n}
   -0.4\max_i p_i-p_F\right)\right)
-$$
+```
 
 The mean gives every function equal weight. The worst penalty receives
 additional emphasis; 60%/40% is a heuristic choice. For a file without
@@ -560,21 +560,21 @@ functions, both function-penalty terms are zero.
 
 ##### Duplication equation
 
-For the internal engine, let $U$ be tokens covered by duplicate matches
-(counted once per token position, including both copies) and $V$ total
+For the internal engine, let $`U`$ be tokens covered by duplicate matches
+(counted once per token position, including both copies) and $`V`$ total
 function tokens:
 
-$$
+```math
 q=
 \begin{cases}
 R(100U/V) & V>0\\
 0 & V=0
 \end{cases}
 \qquad
-D=R\left(\operatorname{clamp}(10-q/10)\right)
-$$
+D=R\left(\mathrm{clamp}(10-q/10)\right)
+```
 
-For `jscpd-rs`, $q$ is the external engine's per-file token percentage,
+For `jscpd-rs`, $`q`$ is the external engine's per-file token percentage,
 rounded to one decimal. The same score conversion applies.
 
 ##### Complete example: from measurements to final score
@@ -584,73 +584,73 @@ set to 60, and both optional complexity checks disabled:
 
 | Input | Function A | Function B |
 | --- | ---: | ---: |
-| Physical lines $L_i$ | 80 | 80 |
-| Maximum nesting $N_i$ | 3 | 3 |
-| Raw/effective complexity $e_i$ | 4 | 16 |
-| Complexity score $c(e_i)$ | 10 | 4 |
-| Structure penalty $p_i$ | 1.6 | 1.6 |
+| Physical lines $`L_i`$ | 80 | 80 |
+| Maximum nesting $`N_i`$ | 3 | 3 |
+| Raw/effective complexity $`e_i`$ | 4 | 16 |
+| Complexity score $`c(e_i)`$ | 10 | 4 |
+| Structure penalty $`p_i`$ | 1.6 | 1.6 |
 
 Assume the file has 1,000 function tokens, of which 200 are duplicate
 coverage, and its package imports five distinct internal packages.
 
 **1. Complexity:** the equal line counts give equal square-root weights:
 
-$$
+```math
 C=R\left(0.8\frac{10+4}{2}+0.2(4)\right)=6.4
-$$
+```
 
-**2. Structure:** each length penalty is $0.08(80-60)=1.6$;
+**2. Structure:** each length penalty is $`0.08(80-60)=1.6`$;
 nesting penalties and the file-length penalty are zero:
 
-$$
+```math
 S=R\left(10-0.6(1.6)-0.4(1.6)-0\right)=8.4
-$$
+```
 
-**3. Duplication:** $q=100(200/1000)=20\%$:
+**3. Duplication:** $`q=100(200/1000)=20\%`$:
 
-$$
+```math
 D=R(10-20/10)=8.0
-$$
+```
 
 **4. Coupling:** five internal imports exceed the free allowance of four:
 
-$$
-K=R\left(\operatorname{clamp}(10-1.25(5-4))\right)=R(8.75)=8.8
-$$
+```math
+K=R\left(\mathrm{clamp}(10-1.25(5-4))\right)=R(8.75)=8.8
+```
 
 **5. Final file score:** use the already-rounded dimension scores:
 
-$$
+```math
 H=R(0.40C+0.25S+0.20D+0.15K)
-$$
+```
 
-$$
+```math
 H=R(0.40(6.4)+0.25(8.4)+0.20(8.0)+0.15(8.8))
 =R(2.56+2.10+1.60+1.32)=R(7.58)=\boxed{7.6}
-$$
+```
 
 The cycle, interface-compliance, and duck-typing dimensions are separate
 gates and do not enter this weighted score. If coupling is unavailable,
 omit it and divide by the sum of available weights:
 
-$$
+```math
 H=R\left(\frac{0.40C+0.25S+0.20D}{0.85}\right)
-$$
+```
 
 **6. Package/repository score:** average the rounded file scores using
-source-line weights $w_j=\max(1,F_j)$:
+source-line weights $`w_j=\max(1,F_j)`$:
 
-$$
+```math
 H_{\text{aggregate}}=R\left(\frac{\sum_j w_jH_j}{\sum_j w_j}\right)
-$$
+```
 
 For this 200-line file scoring 7.6 and another 100-line file scoring 9.0:
 
-$$
+```math
 H_{\text{aggregate}}
 =R\left(\frac{200(7.6)+100(9.0)}{300}\right)
 =R(8.0666\ldots)=\boxed{8.1}
-$$
+```
 
 #### Complexity
 
