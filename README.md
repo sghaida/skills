@@ -659,7 +659,7 @@ analyzer parses the Go syntax tree and adds points for `if`, `for`, `range`,
 `switch`, type switch, and `select` statements, extra nesting, explicit
 `case` clauses, and boolean `&&` or `||` operators.
 
-Function scores are assigned from branching complexity:
+The effective branching complexity includes enabled policy contributions:
 
 ```text
 effective_complexity = branching_complexity
@@ -669,18 +669,23 @@ effective_complexity = branching_complexity
 
 Control-flow statements contribute `1 + current nesting depth`; explicit
 non-default clauses and `&&`/`||` operators contribute 1 each. The following
-table uses **effective** complexity. For example, raw complexity 5, one goto,
+score bands use **effective** complexity. For example, raw complexity 5, one goto,
 and two recursive call sites becomes 7 with both checks enabled: component
 score 8 instead of 10. Justifying recursion does not change this calculation.
 Increases within the same bucket do not change the component score.
 
-```text
-0–5   = 10
-6–10  = 8
-11–15 = 6
-16–25 = 4
-26–40 = 2
->40   = 0
+For effective branching complexity $`e`$, the function score is:
+
+```math
+c(e)=
+\begin{cases}
+10 & 0\le e\le5\\
+8 & 5<e\le10\\
+6 & 10<e\le15\\
+4 & 15<e\le25\\
+2 & 25<e\le40\\
+0 & e>40
+\end{cases}
 ```
 
 The file score is an 80% weighted mean using `sqrt(max(1, function_lines))`
@@ -728,11 +733,12 @@ and files longer than 400 lines. Function lines include blank and comment
 lines from the declaration through its closing brace, excluding its preceding
 doc comment. Closures are measured separately.
 
-The function penalty is:
+For physical function lines $`L`$ and maximum nesting depth $`N`$, the
+function penalty is:
 
-```text
-min(10, 0.08 × max(0, function_lines − T)
-       + 1.25 × max(0, nesting_depth − 3))
+```math
+p(L,N)=\min\left(10,\;
+0.08\max(0,L-T)+1.25\max(0,N-3)\right)
 ```
 
 ```text
@@ -805,9 +811,13 @@ identifier and literal spellings, and finds repeated contiguous windows of 35
 lexical tokens in different functions. Overlapping matches count only once per
 function.
 
-```text
-duplication_percent = cloned_function_tokens / total_function_tokens × 100
-duplication_score = clamp(10 − duplication_percent / 10, 0, 10)
+The duplication percentage $`q`$ and score $`D`$ are:
+
+```math
+\begin{aligned}
+q &= 100\frac{\text{cloned function tokens}}{\text{total function tokens}}\\
+D &= \min\left(10,\max\left(0,10-\frac{q}{10}\right)\right)
+\end{aligned}
 ```
 
 This does not detect renamed-variable clones, semantic duplication, or
@@ -864,8 +874,10 @@ Coupling estimates how difficult it is to change a package independently. It
 counts distinct imports of other packages within the same Go module, excluding
 standard-library and third-party imports.
 
-```text
-coupling_score = clamp(10 − 1.25 × max(0, internal_imports − 4), 0, 10)
+For $`I`$ distinct internal imports, the coupling score is:
+
+```math
+K=\min\left(10,\max\left(0,\;10-1.25\max(0,I-4)\right)\right)
 ```
 
 For example, if a package imports these internal packages:
