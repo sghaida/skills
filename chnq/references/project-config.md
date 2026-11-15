@@ -256,7 +256,12 @@ of a passing result.
 - **`maximum_import_cycles`** limits analyzed files whose packages participate
   in internal import cycles. `0` is recommended.
 - **`maximum_dependency_depth`** limits the longest internal dependency chain
-  observed for a package.
+  observed for an acyclic package graph (a leaf has depth 1). Cyclic graphs
+  use a deterministic conservative bound: collapse each strongly connected
+  component, weight it by its package count, and take the longest weighted
+  dependency path. Every package in a component receives the same depth.
+  This bound need not be an actual simple path within a cycle; use the
+  separate cycle gate to prohibit cycles.
 - **`maximum_incoming_dependencies`** limits package fan-in. High fan-in can
   indicate a central package whose changes affect much of the repository, but
   it is not automatically a defect.
@@ -274,6 +279,8 @@ dependencies.
 - `--check` enables collection automatically for this threshold. Git history
   must be available; collection errors fail analysis. For legacy scans,
   enable the option explicitly or treat the measurement as unavailable.
+- History paths are relative to the scan root, including modules nested
+  inside larger Git repositories. Sibling paths outside the scan are excluded.
 - Git churn is a risk indicator, not a quality score; a frequently changed
   file may be an important, healthy component.
 

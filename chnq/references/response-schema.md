@@ -48,7 +48,11 @@ and `status` (`PASS`, `FAIL`, `UNAVAILABLE`). `minimum_score` comes first,
 then dimensions and health thresholds sorted by name. Required unavailable
 measurements fail the policy; invalid/incomplete analysis produces `ERROR`.
 Dependency depth and fan-in checks use package maxima, not legacy zero
-summary values.
+summary values. Acyclic depth counts the longest package chain, including the
+package itself. For cyclic graphs, strongly connected components are weighted
+by their package counts and depth is the longest weighted component path:
+a deterministic conservative bound, not necessarily an actual simple path.
+Cycle participation is determined from those same components.
 
 `--file relative.go` selects one file; `--package relative-directory` selects
 an exact package directory, excluding descendants. Analysis, the cache,
@@ -58,7 +62,13 @@ contain only the selected scope (a file view retains its enclosing package
 record). Focused `hotspots` contains selected files regardless of score;
 `git_hotspots` is omitted. Missing/excluded selections are errors, never empty
 successful reports. A selected file/package does not receive a separate
-project-threshold pass/fail verdict.
+project-threshold pass/fail verdict. When a selection has no eligible parsed
+files, its error includes any analysis warnings, preserving parser diagnostics
+even though no focused JSON report can be produced.
+
+Git churn uses scan-root-relative history paths, so modules nested in a
+larger checkout retain their eligible file history without sibling paths.
+Corrected graph/churn measurements invalidate previously cached reports.
 
 ## Compact output
 

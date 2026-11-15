@@ -369,9 +369,9 @@ All minimums pass at `measured >= minimum`; all maximums pass at
 | `maximum_todos` | Case-insensitive occurrences of `TODO` in comments. |
 | `maximum_fixmes` | Case-insensitive occurrences of `FIXME` in comments. |
 | `maximum_import_cycles` | Number of analyzed **files** whose package participates in an internal import cycle, not number of distinct cycles or packages. |
-| `maximum_dependency_depth` | Limit on the maximum internal package dependency depth (a leaf has depth 1); `--check` uses package reports, not the zero summary field. |
+| `maximum_dependency_depth` | Limit on maximum package dependency depth: longest chain for acyclic imports, or conservative weighted component depth for cycles (see below). `--check` uses package reports, not the zero summary field. |
 | `maximum_incoming_dependencies` | Limit on the maximum package fan-in: distinct internal importing package directories; `--check` uses package reports. |
-| `maximum_git_churn` | Sum of added and deleted lines attributed to eligible files by `git log --numstat --all`; `--check` enables collection when configured, otherwise use `--include-git-churn`. It covers available history, not a time window. |
+| `maximum_git_churn` | Sum of added and deleted lines attributed to eligible files by `git log --relative --numstat --all`; paths are scan-root-relative, including nested modules. `--check` enables collection when configured, otherwise use `--include-git-churn`. It covers available history, not a time window. |
 
 <!-- markdownlint-enable MD013 MD060 -->
 
@@ -381,6 +381,11 @@ The native `--check` gate uses maxima from complete-project package reports;
 without module context these measurements are unavailable and fail a configured
 gate. JSON consumers must not interpret zero summary fields as evidence of no
 dependencies.
+For acyclic graphs, a leaf has dependency depth 1. Cyclic graphs use strongly
+connected components weighted by their package counts; depth is the longest
+weighted path in the resulting acyclic graph. This is a deterministic,
+conservative bound, not necessarily a simple path within a cycle. All packages
+in a component share its depth; cycle participation is tracked separately.
 Omit the documentation gate for projects that intentionally have no exports.
 Git history must be available when a churn gate is configured.
 

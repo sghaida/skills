@@ -63,48 +63,103 @@ func recordIncomingDependencies(edges map[string]map[string]bool, health map[str
 	}
 }
 
-// calculatepackagedepths handles calculate package depths
+// calculatepackagedepths uses weighted strongly connected components to bound cyclic depth
 func calculatePackageDepths(edges map[string]map[string]bool, health map[string]packageHealth) {
-	state := map[string]int{}
-	var visit func(string, []string) int
-	visit = func(packagePath string, stack []string) int {
-		if state[packagePath] == 1 {
-			markPackageCycle(stack, packagePath, health)
-			return 0
-		}
-		if state[packagePath] == 2 {
-			return health[packagePath].depth
-		}
-		state[packagePath] = 1
-		depth := 0
-		for target := range edges[packagePath] {
-			depth = maxInt(depth, visit(target, append(stack, packagePath)))
-		}
-		state[packagePath] = 2
+	components := packageComponents(edges)
+	graph, weights := packageComponentGraph(edges, components)
+	depths := packageComponentDepths(graph, weights)
+	for packagePath, component := range components {
 		value := health[packagePath]
-		value.depth = depth + 1
+		value.depth = depths[component]
+		value.cycle = weights[component] > 1 || edges[packagePath][packagePath]
 		health[packagePath] = value
-		return value.depth
-	}
-	for packagePath := range edges {
-		visit(packagePath, nil)
 	}
 }
 
-// markpackagecycle handles mark package cycle
-func markPackageCycle(stack []string, repeated string, health map[string]packageHealth) {
-	start := 0
-	for index, name := range stack {
-		if name == repeated {
-			start = index
-			break
+// packagefinishorder records dependency-first traversal order for component discovery
+func packageFinishOrder(edges map[string]map[string]bool) []string {
+	seen := make(map[string]bool)
+	order := make([]string, 0, len(edges))
+	var visit func(string)
+	visit = func(path string) {
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		for target := range edges[path] {
+			visit(target)
+		}
+		order = append(order, path)
+	}
+	for path := range edges {
+		visit(path)
+	}
+	return order
+}
+
+// packagecomponents finds strongly connected groups with a reverse graph traversal
+func packageComponents(edges map[string]map[string]bool) map[string]int {
+	reverse := make(map[string][]string)
+	for source, targets := range edges {
+		for target := range targets {
+			reverse[target] = append(reverse[target], source)
 		}
 	}
-	for _, name := range append(stack[start:], repeated) {
-		value := health[name]
-		value.cycle = true
-		health[name] = value
+	components := make(map[string]int)
+	var assign func(string, int)
+	assign = func(path string, component int) {
+		if _, exists := components[path]; exists {
+			return
+		}
+		components[path] = component
+		for _, source := range reverse[path] {
+			assign(source, component)
+		}
 	}
+	order := packageFinishOrder(edges)
+	for i := len(order) - 1; i >= 0; i-- {
+		assign(order[i], i)
+	}
+	return components
+}
+
+// packagecomponentgraph collapses cycles and weights each component by its package count
+func packageComponentGraph(edges map[string]map[string]bool, components map[string]int) (map[int]map[int]bool, map[int]int) {
+	graph := make(map[int]map[int]bool)
+	weights := make(map[int]int)
+	for path, component := range components {
+		weights[component]++
+		if graph[component] == nil {
+			graph[component] = make(map[int]bool)
+		}
+		for target := range edges[path] {
+			if other := components[target]; other != component {
+				graph[component][other] = true
+			}
+		}
+	}
+	return graph, weights
+}
+
+// packagecomponentdepths computes the longest weighted path in the acyclic component graph
+func packageComponentDepths(graph map[int]map[int]bool, weights map[int]int) map[int]int {
+	depths := make(map[int]int)
+	var visit func(int) int
+	visit = func(component int) int {
+		if depth := depths[component]; depth > 0 {
+			return depth
+		}
+		depth := 0
+		for target := range graph[component] {
+			depth = max(depth, visit(target))
+		}
+		depths[component] = weights[component] + depth
+		return depths[component]
+	}
+	for component := range graph {
+		visit(component)
+	}
+	return depths
 }
 
 // assignpackagedependencies handles assign package dependencies

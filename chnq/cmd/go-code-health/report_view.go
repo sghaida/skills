@@ -64,13 +64,22 @@ func selectReport(report Report, file, pkg string) (Report, error) {
 		}
 	}
 	if len(files) == 0 || (kind == "package" && len(packages) == 0) {
-		return Report{}, fmt.Errorf("requested %s %q has no eligible analyzed files", kind, path)
+		return Report{}, selectionError(kind, path, report.Warnings)
 	}
 	report.Selection = selection
 	report.Files, report.Packages = files, packages
 	report.Hotspots = files
 	report.GitHotspots = nil
 	return report, nil
+}
+
+// selectionerror preserves analysis diagnostics when a focused report cannot be produced
+func selectionError(kind, path string, warnings []string) error {
+	message := fmt.Sprintf("requested %s %q has no eligible analyzed files", kind, path)
+	if len(warnings) > 0 {
+		message += "; analysis warnings: " + strings.Join(warnings, "; ")
+	}
+	return errors.New(message)
 }
 
 // selectionpath resolves project-relative selectors and rejects escapes

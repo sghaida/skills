@@ -496,3 +496,33 @@ func TestSelectionBoundaries(t *testing.T) {
 		t.Fatal("unscoped report changed")
 	}
 }
+
+// testinvalidselectionpreservesparserwarnings exposes diagnostics omitted from focused reports
+func TestInvalidSelectionPreservesParserWarnings(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.com/invalid\n")
+	writeFixture(t, root, "good.go", "package valid\nfunc good() {}\n")
+	writeFixture(t, root, "broken/bad.go", "package broken\nfunc bad( {\n")
+	writeFixture(t, root, projectConfigFileName, `{"version":1,"minimum_score":0}`)
+	code, output, diagnostics := runHealthCLI(t, "--path", root, "--check", "--format", "json")
+	if code != 2 {
+		t.Fatalf("expected partial analysis: %d %s", code, diagnostics)
+	}
+	var report Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.AnalysisStatus != "partial" || len(report.Warnings) != 1 {
+		t.Fatalf("missing baseline parser warning: %+v", report)
+	}
+	for _, scope := range [][]string{{"--file", "broken/bad.go"}, {"--package", "broken"}} {
+		for _, format := range []string{"json", "compact"} {
+			args := append([]string{"--path", root, "--check", "--format", format, "--max-findings", "0"}, scope...)
+			code, output, diagnostics = runHealthCLI(t, args...)
+			if code != 2 || output != "" || !strings.Contains(diagnostics, "no eligible analyzed files") ||
+				!strings.Contains(diagnostics, report.Warnings[0]) {
+				t.Fatalf("selected parse failure hid diagnostics: %d\n%s\n%s", code, output, diagnostics)
+			}
+		}
+	}
+}

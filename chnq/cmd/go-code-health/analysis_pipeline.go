@@ -280,7 +280,7 @@ func newReport(scan ScanContext) Report {
 
 // applygitchurn handles apply git churn
 func applyGitChurn(root string, files []*sourceFile, summary *Summary) error {
-	output, err := exec.CommandContext(context.Background(), "git", "-C", root, "log", "--format=", "--numstat", "--all", "--", ".").Output()
+	output, err := exec.CommandContext(context.Background(), "git", "-C", root, "log", "--relative", "--format=", "--numstat", "--all", "--", ".").Output()
 	if err != nil {
 		return fmt.Errorf("read Git history: %w", err)
 	}
