@@ -163,8 +163,8 @@ func restoreTypeMethods(snapshot map[string][]string) map[string]map[string]bool
 	return typeMethods
 }
 
-// sortedKeys returns map keys in deterministic order.
-func sortedKeys(set map[string]bool) []string {
+// sortedkeys returns map keys in deterministic order
+func sortedKeys[V any](set map[string]V) []string {
 	keys := make([]string, 0, len(set))
 	for key := range set {
 		keys = append(keys, key)

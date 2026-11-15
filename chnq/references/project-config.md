@@ -49,7 +49,8 @@ Projects can store their code-health policy in a checked-in
   `0.0` and `10.0`. A configured dimension is an additional gate; it cannot be
   offset by a higher score in another dimension.
 - `health_thresholds` is optional. These thresholds apply to repository-level
-  values in the report's `summary.health` object. `minimum_` thresholds pass
+  health measurements (package maxima for dependency depth and fan-in).
+  `minimum_` thresholds pass
   when the measured value is greater than or equal to the threshold;
   `maximum_` thresholds pass when the measured value is less than or equal to
   the threshold.
@@ -71,11 +72,23 @@ Projects can store their code-health policy in a checked-in
   the configured limit rather than half of it; scores may improve relative
   to the previous model.
 
-The binary directly reads the duplication engine, broad-interface threshold,
-and the three new scoring settings. Other fields are agent/CI policy:
-pass `--include-tests` for `include_tests: true`, pass `--fail-under` for the
-overall minimum, and compare dimension/health gates separately. JSON minimums
-do not automatically change the binary's exit status.
+Use `--check` to have the binary parse and enforce the entire policy, rather
+than asking an LLM or an ad-hoc script to compare JSON. It requires `version: 1`
+and `minimum_score`; checks every configured dimension and health threshold;
+applies `include_tests`; and enables Git churn when `maximum_git_churn` is
+configured. Unknown keys, explicit nulls, invalid numeric ranges/types,
+negative or fractional count limits, and unsupported versions fail with exit 2.
+Documentation percentages may be fractional within 0–100; score limits must
+be within 0–10. An explicit conflicting `--include-tests` flag is an error.
+
+Without `--check`, legacy behavior is preserved: the binary reads the engine
+and scoring settings, while test/churn inclusion and the optional overall
+gate use CLI flags. JSON minimums alone do not change its exit status.
+With `--check`, `--fail-under` can add a stricter overall gate, never weaken
+project policy. Missing required measurements fail instead of becoming zero.
+
+Keep the complete project root as `--path`. `--file` and `--package` filter
+displayed details only; neither changes the policy scope or analyzed inputs.
 
 See the [complete configuration example and calculations](../../README.md#project-policy-and-required-health-gate)
 and [scoring model](scoring-model.md) for formulas.
@@ -248,17 +261,19 @@ of a passing result.
   indicate a central package whose changes affect much of the repository, but
   it is not automatically a defect.
 
-Currently `summary.health.dependency_depth` and `incoming_dependencies` are
-not aggregated and remain zero. For meaningful gates on these two metrics,
-compare file/package measurements explicitly (for example their maximum).
-Do not treat zero summary fields as proof of no dependencies.
+The legacy `summary.health.dependency_depth` and `incoming_dependencies`
+fields remain zero. Native checks use maxima from complete-project package
+reports instead. Without module context these measurements are unavailable
+and fail configured gates. Do not treat zero summary fields as proof of no
+dependencies.
 
 ### Git churn
 
 - **`maximum_git_churn`** limits changed lines reported by the optional
   `--include-git-churn` scan.
-- This threshold is only meaningful when Git history is available and the
-  option is enabled. Otherwise, omit it or treat the result as unavailable.
+- `--check` enables collection automatically for this threshold. Git history
+  must be available; collection errors fail analysis. For legacy scans,
+  enable the option explicitly or treat the measurement as unavailable.
 - Git churn is a risk indicator, not a quality score; a frequently changed
   file may be an important, healthy component.
 
@@ -282,18 +297,24 @@ An analysis is **passing** only when:
 4. Every configured `health_thresholds` value is present and meets its
    minimum or maximum comparison.
 
-When a policy exists, the skill must run this check before every agentic task
-or code change. If the check fails, code-health remediation takes priority:
-the agent must update the code to meet at least the configured thresholds,
-re-run the complete scan, and only then continue with unrelated work. If safe
-remediation cannot meet the thresholds, the task is blocked and the agent must
-report the remaining findings. Thresholds must not be lowered silently to make
-a failing scan pass.
+When a policy exists, run the complete-project check for health requests,
+before modifying Go source, and again after changes. Let the analyzer validate
+cached inputs rather than assuming a previous result is still current.
 
-## Status bars
+Existing violations do not automatically block unrelated requested work.
+Report them and obtain approval before expanding scope to remediate them.
+Distinguish pre-existing failures from introduced regressions using baseline
+measurements and findings, not exit codes alone. Address new regressions
+within scope or report unresolved blockers. Work may be complete with disclosed
+pre-existing failures; policy compliance remains failing until every gate
+passes. Do not claim authorized health remediation succeeded if its agreed
+targets remain unmet. Thresholds must never be lowered silently.
 
-The skill should show the overall score and every configured threshold as a
-horizontal bar, followed by the measured value and threshold. When the chat
+## Optional status bars
+
+Concise numeric reporting is the default. When status bars are requested,
+show the overall score and configured thresholds as horizontal bars, followed
+by their measured values, thresholds, and outcomes. When the chat
 renderer supports inline HTML/CSS, prefer screenshot-style bars with a dark
 track and colored fill:
 

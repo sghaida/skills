@@ -3,11 +3,11 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,22 +127,24 @@ type Configuration struct {
 
 // report is the complete json-serializable analyzer result
 type Report struct {
-	SchemaVersion   string          `json:"schema_version"`
-	ScoringVersion  string          `json:"scoring_version"`
-	Language        string          `json:"language"`
-	MaxScore        int             `json:"max_score"`
-	Configuration   Configuration   `json:"configuration"`
-	Repository      string          `json:"repository"`
-	CodeHealthScore *float64        `json:"code_health_score"`
-	Classification  string          `json:"classification"`
-	AnalysisStatus  string          `json:"analysis_status"`
-	Dimensions      Dimensions      `json:"dimensions"`
-	Summary         Summary         `json:"summary"`
-	Packages        []PackageReport `json:"packages"`
-	Files           []FileReport    `json:"files"`
-	Hotspots        []FileReport    `json:"hotspots"`
-	GitHotspots     []FileReport    `json:"git_hotspots,omitempty"`
-	Warnings        []string        `json:"warnings"`
+	SchemaVersion   string           `json:"schema_version"`
+	ScoringVersion  string           `json:"scoring_version"`
+	Language        string           `json:"language"`
+	MaxScore        int              `json:"max_score"`
+	Configuration   Configuration    `json:"configuration"`
+	Repository      string           `json:"repository"`
+	CodeHealthScore *float64         `json:"code_health_score"`
+	Classification  string           `json:"classification"`
+	AnalysisStatus  string           `json:"analysis_status"`
+	Dimensions      Dimensions       `json:"dimensions"`
+	Summary         Summary          `json:"summary"`
+	Packages        []PackageReport  `json:"packages"`
+	Files           []FileReport     `json:"files"`
+	Hotspots        []FileReport     `json:"hotspots"`
+	GitHotspots     []FileReport     `json:"git_hotspots,omitempty"`
+	Warnings        []string         `json:"warnings"`
+	Policy          *PolicyResult    `json:"policy,omitempty"`
+	Selection       *ReportSelection `json:"selection,omitempty"`
 }
 
 // classification handles classification
@@ -245,12 +247,18 @@ type RunConfig struct {
 	cacheFileSet    bool
 	explainHotspots bool
 	hotspotsScope   string
+	check           bool
+	policy          *checkPolicy
+	maxFindings     int
+	file            string
+	pkg             string
+	includeTestsSet bool
 }
 
 // parseflags handles parse flags
 func parseFlags() RunConfig {
 	path := flag.String("path", ".", "Go repository or directory to scan (read-only)")
-	output := flag.String("format", "json", "Output format: json or text")
+	output := flag.String("format", "json", "Output format: json, text, or compact")
 	includeTests := flag.Bool("include-tests", false, "Include *_test.go files")
 	includeGitChurn := flag.Bool("include-git-churn", false, "Include changed-line counts from Git history")
 	failUnder := flag.Float64("fail-under", -1, "Exit 3 if the score falls below the supplied 0-10 threshold")
@@ -261,11 +269,19 @@ func parseFlags() RunConfig {
 	cacheFile := flag.String("cache-file", defaultCacheFileName, "Cache file location")
 	explainHotspots := flag.Bool("explain-hotspots", false, "Generate detailed explanations for hotspots")
 	hotspotsScope := flag.String("hotspots-scope", "file", "Hotspots scope: file or package")
+	check := flag.Bool("check", false, "Enforce all project policy thresholds")
+	maxFindings := flag.Int("max-findings", 10, "Maximum detailed findings in compact output (0 hides details)")
+	file := flag.String("file", "", "Show one file relative to the complete project --path")
+	pkg := flag.String("package", "", "Show one package directory relative to the complete project --path")
 	flag.Parse()
 	cacheFileSet := false
+	includeTestsSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "cache-file" {
 			cacheFileSet = true
+		}
+		if f.Name == "include-tests" {
+			includeTestsSet = true
 		}
 	})
 
@@ -283,6 +299,11 @@ func parseFlags() RunConfig {
 		cacheFileSet:    cacheFileSet,
 		explainHotspots: *explainHotspots,
 		hotspotsScope:   *hotspotsScope,
+		check:           *check,
+		maxFindings:     *maxFindings,
+		file:            *file,
+		pkg:             *pkg,
+		includeTestsSet: includeTestsSet,
 	}
 }
 
@@ -359,13 +380,25 @@ func checkFailUnder(report Report, failUnder float64) int {
 
 // emitcompletedreport handles emit completed report
 func emitCompletedReport(report Report, cfg RunConfig) int {
+	if cfg.policy != nil {
+		report.Policy = evaluatePolicy(report, cfg.policy)
+	}
+	var err error
+	report, err = selectReport(report, cfg.file, cfg.pkg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	generateExplanations(&report, cfg)
-	if emitErr := emitReport(cfg.output, report); emitErr != nil {
+	if emitErr := emitConfiguredReport(os.Stdout, cfg, report); emitErr != nil {
 		fmt.Fprintln(os.Stderr, emitErr)
 		return 2
 	}
-	if report.AnalysisStatus != "complete" {
+	if report.AnalysisStatus != "complete" || (cfg.check && report.CodeHealthScore == nil) {
 		return 2
+	}
+	if report.Policy != nil && report.Policy.Status != "PASS" {
+		return 3
 	}
 	return checkFailUnder(report, cfg.failUnder)
 }
@@ -415,6 +448,11 @@ func run() int {
 	cfg := parseFlags()
 
 	if err := validateFlags(cfg.output, cfg.failUnder, cfg.workers, cfg.hotspotsScope); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	cfg, err := preparePresentation(cfg)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
@@ -481,15 +519,15 @@ func validateFlags(output string, failUnder float64, workers int, hotspotsScope 
 
 // validateoutput handles validate output
 func validateOutput(output string) error {
-	if output != "json" && output != "text" {
-		return errors.New("invalid --format: expected json or text")
+	if output != "json" && output != "text" && output != "compact" {
+		return errors.New("invalid --format: expected json, text, or compact")
 	}
 	return nil
 }
 
 // validatefailunder handles validate fail under
 func validateFailUnder(failUnder float64) error {
-	if failUnder > 10 || (failUnder < 0 && failUnder != -1) {
+	if math.IsNaN(failUnder) || math.IsInf(failUnder, 0) || failUnder > 10 || (failUnder < 0 && failUnder != -1) {
 		return errors.New("invalid --fail-under: expected 0-10")
 	}
 	return nil
@@ -507,20 +545,6 @@ func validateWorkers(workers int) error {
 func validateHotspotsScope(scope string) error {
 	if scope != "file" && scope != "package" {
 		return errors.New("invalid --hotspots-scope: expected file or package")
-	}
-	return nil
-}
-
-// emitreport handles emit report
-func emitReport(output string, report Report) error {
-	if output == "text" {
-		writeText(os.Stdout, report)
-		return nil
-	}
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		return fmt.Errorf("failed to write JSON: %w", err)
 	}
 	return nil
 }

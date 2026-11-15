@@ -60,7 +60,7 @@ flowchart TD
     M --> N[Recompute all project-wide metrics and scores]
     J --> O[Evaluate policy thresholds]
     N --> O
-    O --> P[Return JSON or text report]
+    O --> P[Return compact, JSON, or text report]
     P --> Q[Explain hotspots and refactoring priorities]
 ```
 
@@ -91,33 +91,71 @@ tests, security analysis, or the Go compiler.
 The recommended workflow is:
 
 1. **Identify the project:** The agent locates the Go module to analyze.
-2. **Read the policy:** The agent reads `.go-code-health.json` and uses its
-   duplication engine, thresholds, and test-inclusion settings.
+2. **Apply the policy:** The analyzer reads `.go-code-health.json` when run
+   with `--check`, including thresholds and test-inclusion settings.
 3. **Run a baseline:** The agent performs a complete scan before making a
    requested code change.
-4. **Review evidence:** The agent checks the overall score, every configured
-   dimension, health thresholds, and the highest-priority hotspots.
+4. **Review evidence:** The analyzer evaluates every configured gate; the
+   agent reviews its explicit results and highest-priority findings.
 5. **Make focused changes:** If the user requests implementation, the agent
    addresses the measured findings without changing unrelated behavior.
 6. **Verify the result:** The agent runs the same complete scan after the
    change and reports the new measured values and policy status.
-7. **Use CI as a guardrail:** The project can run `--fail-under` and compare
-   configured dimension and health thresholds in continuous integration.
+7. **Use CI as a guardrail:** Run `--check` to enforce overall, dimension,
+   and health thresholds without LLM comparisons or JSON-parsing scripts.
+
+Existing policy violations do not automatically expand the requested task:
+report them and obtain approval before unrelated remediation. Use baseline
+evidence to distinguish pre-existing failures from introduced regressions;
+fix new regressions within scope or report unresolved blockers. Completion
+of requested work and project-policy compliance are separate outcomes.
+Always disclose a failing policy. Deep architectural reviews and status bars
+are optional, not requirements for passing checks. Run normal project tests
+separately during authorized implementation; the analyzer itself stays
+read-only.
 
 `chnq` reads source files and Git metadata only when Git churn is explicitly
 enabled. It never builds, runs, tests, or modifies the analyzed project. An
 agent may edit project files only as a separate, explicitly requested coding
 action, followed by a fresh `chnq` scan.
 
-An agent can request a machine-readable report with:
+The recommended low-output agent workflow is:
 
 ```sh
-./chnq/scripts/analyze.sh /path/to/go/repo --format json --no-cache
+./chnq/scripts/analyze.sh /path/to/go/repo --check --format compact
 ```
 
 It can then use the measured report to explain why a policy passes or fails,
 prioritize hotspots, and verify that a refactoring improved the intended
 dimension without claiming that the score proves correctness.
+
+The short [skill instructions](chnq/SKILL.md) link to detailed references
+instead of loading all command examples and explanations upfront. Compact
+output retains every configured comparison and warning, but limits detailed
+findings to 10 by default. `--max-findings N` changes that detail budget;
+`0` hides details without hiding policy failures. Full JSON remains available.
+
+For on-demand file/package health, keep the complete project root as the scan
+target and filter only the display:
+
+```sh
+./chnq/scripts/analyze.sh /path/to/go/repo --check --format compact \
+  --file internal/orders/service.go
+./chnq/scripts/analyze.sh /path/to/go/repo --check --format compact \
+  --package internal/orders
+```
+
+The package selector is an exact directory, not recursive and not a Go import
+path. Both views retain project-wide duplication and architecture context,
+reuse the complete-project cache, and leave the project gate unchanged.
+Project thresholds are not separately applied as file/package policy.
+Missing/excluded or outside-root selections fail explicitly. `--file` and
+`--package` are mutually exclusive and also work with JSON/text output.
+For these options and `--check`, use a complete project directory (the module
+root when one exists), not a direct file or module subdirectory as `--path`.
+
+These changes reduce instruction and tool-output volume, not scoring scope.
+Model-token or task-cost savings require a workload-specific benchmark.
 
 ### Quick start
 
@@ -135,8 +173,14 @@ Produce a JSON report:
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --format json > health.json
 ```
 
-Use it as a CI quality gate. This command exits with code 3 when the score is
-below the requested threshold:
+Enforce an existing project policy in CI (0 passed, 2 invalid/incomplete,
+3 policy failed):
+
+```sh
+./chnq/scripts/analyze.sh /path/to/your/go/repo --check --format compact
+```
+
+For a standalone overall-score gate without full policy enforcement:
 
 ```sh
 ./chnq/scripts/analyze.sh /path/to/your/go/repo --fail-under 7
@@ -263,14 +307,18 @@ illustrative, not universal recommendations:
 
 #### Configuration keys and who applies them
 
-The Go analyzer directly reads `duplication_engine`,
+The Go analyzer always reads `duplication_engine`,
 `broad_interface_threshold`, `goto_check`, `max_function_lines`, and
-`recursion_check`. The remaining keys describe the **agent/CI policy**:
-the binary does not automatically enforce the JSON minimums or read
-`include_tests` as a scan option. Pass `--include-tests` when that policy
-value is true, and `--fail-under N` for the overall minimum. An agent or CI
-consumer must compare dimension and health thresholds with the JSON report.
-Missing or unavailable required measurements must not be treated as passing.
+`recursion_check`. With `--check`, it also validates and enforces the full
+version-1 policy, reads `include_tests`, and enables Git churn when its limit
+is configured. An explicit conflicting `--include-tests` value is an error.
+Missing/unavailable required measurements fail the gate. Unknown policy keys,
+nulls, invalid thresholds, and unsupported versions are configuration errors.
+
+Without `--check`, existing flag-based behavior remains: JSON minimums are
+not automatically enforced, `--include-tests` controls test inclusion, and
+`--fail-under N` gates only the overall score. With `--check`, `--fail-under`
+is an additional gate and cannot weaken the policy.
 
 <!-- markdownlint-disable MD013 MD060 -->
 
@@ -278,14 +326,14 @@ Missing or unavailable required measurements must not be treated as passing.
 | --- | --- |
 | `version` | Policy schema version, currently `1`; not the scoring-model version. |
 | `duplication_engine` | `internal` by default, or `jscpd-rs`. Selects token-duplication measurement; see the duplication calculation below. Missing external binaries produce an error, never a fallback. |
-| `minimum_score` | Agent/CI minimum overall score, inclusive, on the 0–10 scale. The example uses `7.0`; there is no automatic binary gate unless `--fail-under 7` is passed. |
+| `minimum_score` | Required inclusive overall minimum on the 0–10 scale; enforced by `--check`. Without that flag use `--fail-under N` for a standalone overall gate. |
 | `minimum_dimensions` | Optional independent, inclusive minimums for the seven dimension scores. Each configured score must meet its own target; formulas are below. |
 | `health_thresholds` | Optional limits on measured health indicators; these do not directly subtract score points. See the table below. |
 | `broad_interface_threshold` | Default `5` (also the legacy fallback for non-positive integers); an interface is broad when its directly declared method count is **greater than** this value. This affects interface compliance, not the four-dimension overall score. |
 | `goto_check` | Boolean, default `false`. When true, each `goto` adds **+1** to its function's effective branching complexity and produces a `goto-usage` warning per function. Labeled `break`/`continue` and `fallthrough` do not count. |
 | `max_function_lines` | Positive integer, default `80`. Both the length-based structure penalty and the `long-function` warning start **above** this many physical lines. Explicit zero, negative, fractional, or wrong-type values are errors. |
 | `recursion_check` | Boolean, default `false`. When true, each function with detected direct recursion adds **+1 total** to effective branching complexity, regardless of its call-site count or justification. Missing justification produces a warning; see the directive below. |
-| `include_tests` | Agent/CI scan preference, default `false`; pass `--include-tests` to include `_test.go` files. It changes the analyzed population, not a formula coefficient. |
+| `include_tests` | Scan preference, default `false`; applied automatically by `--check`, otherwise use `--include-tests`. It changes the analyzed population, not a formula coefficient. |
 
 <!-- markdownlint-enable MD013 MD060 -->
 
@@ -308,25 +356,25 @@ All minimums pass at `measured >= minimum`; all maximums pass at
 | `maximum_todos` | Case-insensitive occurrences of `TODO` in comments. |
 | `maximum_fixmes` | Case-insensitive occurrences of `FIXME` in comments. |
 | `maximum_import_cycles` | Number of analyzed **files** whose package participates in an internal import cycle, not number of distinct cycles or packages. |
-| `maximum_dependency_depth` | Intended limit on internal dependency-chain depth; file/package depth counts the package itself (a leaf has depth 1). See the summary limitation below. |
-| `maximum_incoming_dependencies` | Intended limit on package fan-in: distinct internal importing package directories. See the summary limitation below. |
-| `maximum_git_churn` | Sum of added and deleted lines attributed to eligible files by `git log --numstat --all`; requires `--include-git-churn`. It covers available history, not a time window. |
+| `maximum_dependency_depth` | Limit on the maximum internal package dependency depth (a leaf has depth 1); `--check` uses package reports, not the zero summary field. |
+| `maximum_incoming_dependencies` | Limit on the maximum package fan-in: distinct internal importing package directories; `--check` uses package reports. |
+| `maximum_git_churn` | Sum of added and deleted lines attributed to eligible files by `git log --numstat --all`; `--check` enables collection when configured, otherwise use `--include-git-churn`. It covers available history, not a time window. |
 
 <!-- markdownlint-enable MD013 MD060 -->
 
-**Current summary limitation:** dependency depth and incoming dependencies are
-reported per file/package but are not aggregated into `summary.health`
-(those summary fields currently remain zero). For meaningful gates on these
-two metrics, explicitly compare file/package values, for example their
-maximum; do not interpret a zero summary value as evidence of no dependencies.
+**Legacy summary limitation:** dependency depth and incoming dependencies are
+reported per file/package but are not aggregated into `summary.health`.
+The native `--check` gate uses maxima from complete-project package reports;
+without module context these measurements are unavailable and fail a configured
+gate. JSON consumers must not interpret zero summary fields as evidence of no
+dependencies.
 Omit the documentation gate for projects that intentionally have no exports.
-Omit the churn gate when churn collection is disabled.
+Git history must be available when a churn gate is configured.
 
 For the example above, a corresponding complete scan is:
 
 ```sh
-./chnq/scripts/analyze.sh /path/to/your/go/repo --format json \
-  --fail-under 7 --include-git-churn
+./chnq/scripts/analyze.sh /path/to/your/go/repo --check --format compact
 ```
 
 #### Recursion justification and limits
@@ -406,11 +454,13 @@ using a different engine.
 
 On the first run, if the file is absent, the skill performs a full scan,
 shows the baseline, asks the user to choose the thresholds, and creates the
-file in the project repository. It must run a full scan before every coding
-task and again after changes. A task passes only when the scan is complete and
-the overall score and every configured dimension meet their thresholds. If an
-existing policy fails, code-health remediation takes priority and the agent
-must update the code toward the configured values before unrelated work.
+file in the project repository. Run a complete-project check for health
+requests, before modifying Go source, and again after changes. The analyzer
+validates cache reuse; agents must not assume remembered results are current.
+Policy passes only when analysis is complete and all configured overall,
+dimension, and health thresholds pass. Report existing failures and request
+approval before unrelated remediation. Requested work may be complete with
+disclosed pre-existing failures, without claiming policy compliance.
 
 See [the project policy reference](chnq/references/project-config.md) for the
 complete schema, first-run behavior, and a concrete threshold example.
@@ -1063,8 +1113,9 @@ hotspots.
 
 #### God-object review
 
-The skill also performs a qualitative god-object review for hotspots and
-packages with weak structure scores. It inspects Go structs and their methods
+When requested or needed to investigate relevant findings, the skill performs
+a qualitative god-object review for hotspots and packages with weak structure
+scores. It inspects Go structs and their methods
 for one type that owns several unrelated responsibilities, such as I/O,
 parsing, business rules, and reporting.
 
@@ -1075,8 +1126,8 @@ be meaningfully unrelated.
 
 #### Mixed-responsibility review
 
-The skill also reviews hotspot files and packages for unrelated concerns
-grouped together. Examples include a package that performs file or network
+When requested or needed for relevant findings, the skill reviews files and
+packages for unrelated concerns grouped together. Examples include a package that performs file or network
 I/O, parses data, applies business rules, persists results, formats output,
 and owns test assertions.
 
