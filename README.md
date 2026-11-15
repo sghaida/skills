@@ -130,10 +130,23 @@ prioritize hotspots, and verify that a refactoring improved the intended
 dimension without claiming that the score proves correctness.
 
 The short [skill instructions](chnq/SKILL.md) link to detailed references
-instead of loading all command examples and explanations upfront. Compact
-output retains every configured comparison and warning, but limits detailed
-findings to 10 by default. `--max-findings N` changes that detail budget;
-`0` hides details without hiding policy failures. Full JSON remains available.
+instead of loading all command examples and explanations upfront. Passing
+compact checks show a concise summary and passed/total check count. Failed or
+unavailable comparisons and analysis warnings always remain visible.
+`--verbose` adds all dimensions, comparisons, and bounded findings, even when
+policy passes:
+
+```sh
+./chnq/scripts/analyze.sh /path/to/go/repo --check --format compact --verbose
+```
+
+Failing, incomplete, unchecked, and scoped views retain findings by default.
+The limit remains 10; `--max-findings N` changes that detail budget, and `0`
+hides details without hiding policy failures or warnings. Measured findings
+relevant to failed dimensions/gates precede unrelated findings, with severity
+and deterministic tie-breaks within each relevance group. Synthetic investigation
+hints fill only remaining budget when measured evidence for a failed metric is
+missing. Full JSON/text remain available and unchanged by `--verbose`.
 
 For on-demand file/package health, keep the complete project root as the scan
 target and filter only the display:

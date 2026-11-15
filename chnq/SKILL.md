@@ -48,8 +48,11 @@ tests and validation separately.
   about that scope. Keep `<root>` unchanged: analysis/cache and policy remain
   project-wide; only displayed details are filtered. Packages exclude child
   packages. A selected score is not a project-policy verdict.
-- Compact output defaults to 10 findings; use `--max-findings N` to adjust.
-  Every configured check and analysis warning remains visible.
+- Passing compact checks show a short summary; `--verbose` adds all dimensions,
+  comparisons, and findings. Failures, unavailable checks, and analysis warnings
+  remain visible. Failing, unchecked, or scoped views default to 10 findings;
+  use `--max-findings N` to adjust. Measured gate-relevant findings precede
+  fallback investigation hints.
 - Reuse the default git-ignored `.chnq-health-status` cache. Read only relevant
   source regions and references; use full JSON or explanations when needed.
   Let the analyzer verify cache validity; do not assume unchanged inputs or

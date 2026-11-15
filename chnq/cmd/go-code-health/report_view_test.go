@@ -187,7 +187,7 @@ func TestCompactFindingLimits(t *testing.T) {
 	}
 	text := output.String()
 	for _, want := range []string{"minimum_dimensions.complexity: 8.5 >= 9 [FAIL]",
-		"maximum_panics: 1 <= 0 [FAIL]", "Findings: 1 shown / 4 available", "- a.go:12 [long-function]"} {
+		"maximum_panics: 1 <= 0 [FAIL]", "Findings: 1 shown / 2 available", "- a.go:12 [long-function]"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("compact output missing %q:\n%s", want, text)
 		}
@@ -218,6 +218,234 @@ func TestCompactFindingLimits(t *testing.T) {
 		if code != 0 || !strings.Contains(output, tc.want) {
 			t.Fatalf("CLI findings budget incorrect: code=%d\n%s\n%s", code, output, diagnostics)
 		}
+	}
+}
+
+// testcompactpasssummary retains warnings while making full comparisons opt-in
+func TestCompactPassSummary(t *testing.T) {
+	policy := testCheckPolicy(t, t.TempDir())
+	report := testGateReport()
+	report.ScoringVersion, report.Classification = scoringVersion, "excellent"
+	report.Policy = evaluatePolicy(report, policy)
+	report.Warnings = []string{"example analysis warning"}
+	report.Files = []FileReport{{Path: "a.go", Score: 9, Findings: []Finding{
+		{Rule: "undocumented-exported-symbols", Severity: "warning", Message: "one undocumented export"},
+	}}}
+	cfg := RunConfig{output: "compact", failUnder: -1, maxFindings: 10}
+	var concise, verbose bytes.Buffer
+	if err := emitConfiguredReport(&concise, cfg, report); err != nil {
+		t.Fatal(err)
+	}
+	text := concise.String()
+	for _, want := range []string{"Analysis: complete", "Project score: 9.0/10", "Model: " + scoringVersion,
+		"Project files:", "Project policy: PASS", "Checks: 17/17 passed", "Warning: example analysis warning"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("passing summary missing %q:\n%s", want, text)
+		}
+	}
+	for _, omitted := range []string{"Project dimensions:", "minimum_score:", "Findings:", "a.go"} {
+		if strings.Contains(text, omitted) {
+			t.Fatalf("routine passing output included %q:\n%s", omitted, text)
+		}
+	}
+	cfg.verbose = true
+	if err := emitConfiguredReport(&verbose, cfg, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(verbose.String(), "[PASS]") != 17 || !strings.Contains(verbose.String(), "Project dimensions:") ||
+		!strings.Contains(verbose.String(), "Findings: 1 shown / 1 available") {
+		t.Fatalf("verbose output lost full details:\n%s", verbose.String())
+	}
+	if concise.Len()*2 >= verbose.Len() {
+		t.Fatalf("passing summary did not halve verbose output bytes: %d vs %d", concise.Len(), verbose.Len())
+	}
+
+	cfg.verbose = false
+	for _, tc := range []struct {
+		name   string
+		modify func(*Report, *RunConfig)
+		want   string
+	}{
+		{"unavailable", func(r *Report, _ *RunConfig) {
+			r.Dimensions.Coupling = nil
+			r.Policy = evaluatePolicy(*r, policy)
+		}, "minimum_dimensions.coupling: N/A >= 9 [UNAVAILABLE]"},
+		{"partial", func(r *Report, _ *RunConfig) {
+			r.AnalysisStatus = "partial"
+			r.Policy = evaluatePolicy(*r, policy)
+		}, "Project policy: ERROR"},
+		{"cli-failure", func(_ *Report, c *RunConfig) {
+			c.failUnder = 10
+		}, "CLI score gate: FAIL"},
+		{"selected", func(r *Report, _ *RunConfig) {
+			r.Selection = &ReportSelection{Kind: "file", Path: "a.go", CodeHealthScore: 9}
+		}, "Selected file: a.go"},
+		{"unchecked", func(r *Report, _ *RunConfig) {
+			r.Policy = nil
+		}, "Project policy: NOT CHECKED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, config := report, cfg
+			tc.modify(&selected, &config)
+			var output bytes.Buffer
+			if err := emitConfiguredReport(&output, config, selected); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{tc.want, "Findings:", "Warning: example analysis warning"} {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("required context hidden: %q\n%s", want, output.String())
+				}
+			}
+		})
+	}
+}
+
+// testcompactverbosecli preserves exit codes and cached full-report contracts
+func TestCompactVerboseCLI(t *testing.T) {
+	root := testViewProject(t)
+	writeFixture(t, root, projectConfigFileName, `{"version":1,"minimum_score":0,"health_thresholds":{"maximum_panics":1}}`)
+	for _, verbose := range []bool{false, true} {
+		args := []string{"--path", root, "--check", "--format", "compact"}
+		if verbose {
+			args = append(args, "--verbose", "--cache-debug")
+		}
+		code, output, diagnostics := runHealthCLI(t, args...)
+		if code != 0 || !strings.Contains(output, "Checks: 2/2 passed") ||
+			strings.Contains(output, "minimum_score:") != verbose || strings.Contains(output, "Findings:") != verbose {
+			t.Fatalf("CLI verbosity changed policy or lost detail: %d\n%s\n%s", code, output, diagnostics)
+		}
+		if verbose && !strings.Contains(diagnostics, "HIT") {
+			t.Fatalf("presentation-only flag invalidated the cache: %s", diagnostics)
+		}
+	}
+	for _, format := range []string{"json", "text"} {
+		args := []string{"--path", root, "--check", "--format", format}
+		code, plain, diagnostics := runHealthCLI(t, args...)
+		if code != 0 {
+			t.Fatalf("%s failed: %s", format, diagnostics)
+		}
+		code, verbose, diagnostics := runHealthCLI(t, append(args, "--verbose")...)
+		if code != 0 || plain != verbose {
+			t.Fatalf("verbose changed %s contract: %d\n%s", format, code, diagnostics)
+		}
+	}
+	writeFixture(t, root, projectConfigFileName, `{"version":1,"minimum_score":0,"health_thresholds":{"maximum_panics":0}}`)
+	for _, args := range [][]string{nil, {"--verbose"}} {
+		code, output, diagnostics := runHealthCLI(t, append([]string{"--path", root, "--check", "--format", "compact", "--max-findings", "0"}, args...)...)
+		if code != 3 || !strings.Contains(output, "maximum_panics: 1 <= 0 [FAIL]") {
+			t.Fatalf("verbosity hid policy failure: %d\n%s\n%s", code, output, diagnostics)
+		}
+	}
+}
+
+// testcompactfindingpriority ranks gate evidence before severity and low-scoring unrelated files
+func TestCompactFindingPriority(t *testing.T) {
+	report := Report{
+		Policy: &PolicyResult{Status: "FAIL", Checks: []PolicyCheck{
+			{Name: "minimum_dimensions.complexity", Status: "FAIL", Threshold: 9},
+			{Name: "maximum_panics", Status: "FAIL", Threshold: 0},
+		}},
+		Files: []FileReport{
+			{Path: "a.go", Score: 1, Findings: []Finding{
+				{Rule: "unknown", Message: "unknown"},
+				{Rule: "stale-recursion-directive", Severity: "info"},
+				{Rule: "undocumented-exported-symbols", Severity: "warning"},
+				{Rule: "panic-usage", Severity: "high"},
+			}},
+			{Path: "b.go", Score: 8, Findings: []Finding{{Rule: "high-complexity", Severity: "warning"}}},
+			{Path: "c.go", Score: 9, Findings: []Finding{
+				{Rule: "high-complexity", Severity: "high", Line: 12, Message: "b"},
+				{Rule: "high-complexity", Severity: "high", Line: 12, Message: "a"},
+				{Rule: "deep-nesting", Severity: "high", Line: 12},
+				{Rule: "high-complexity", Severity: "high", Line: 5},
+			}},
+			{Path: "d.go", Score: 0, Dimensions: Dimensions{Complexity: ptr(1)}},
+			{Path: "z.go", Score: 9, Findings: []Finding{{Rule: "high-complexity", Severity: "high", Line: 1}}},
+		},
+	}
+	got := compactFindings(report)
+	wantPaths := []string{"c.go", "c.go", "c.go", "c.go", "z.go", "b.go", "a.go", "a.go", "a.go", "a.go", "d.go"}
+	for i, path := range wantPaths {
+		if len(got) != len(wantPaths) || got[i].path != path {
+			t.Fatalf("wrong priority at %d: %+v", i, got)
+		}
+	}
+	if got[0].finding.Line != 5 || got[1].finding.Rule != "deep-nesting" ||
+		got[2].finding.Message != "a" || got[3].finding.Message != "b" || !got[len(got)-1].synthetic {
+		t.Fatalf("tie-breaking or measured-first ordering failed: %+v", got)
+	}
+	for i, j := 0, len(report.Files)-1; i < j; i, j = i+1, j-1 {
+		report.Files[i], report.Files[j] = report.Files[j], report.Files[i]
+	}
+	for _, file := range report.Files {
+		for i, j := 0, len(file.Findings)-1; i < j; i, j = i+1, j-1 {
+			file.Findings[i], file.Findings[j] = file.Findings[j], file.Findings[i]
+		}
+	}
+	if shuffled := compactFindings(report); !reflect.DeepEqual(got, shuffled) {
+		t.Fatal("presentation order depends on input order")
+	}
+}
+
+// testgatefindingfamilies checks relevance without preferring unrelated severe findings
+func TestGateFindingFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		rule string
+		gate string
+	}{
+		{"high-complexity", "minimum_dimensions.complexity"},
+		{"goto-usage", "minimum_dimensions.complexity"},
+		{"undocumented-recursion", "minimum_dimensions.complexity"},
+		{"deep-nesting", "minimum_dimensions.structure"},
+		{"long-function", "minimum_dimensions.structure"},
+		{"large-file", "minimum_score"},
+		{"duplicate-blocks", "minimum_dimensions.duplication"},
+		{"high-coupling", "minimum_dimensions.coupling"},
+		{"import-cycle", "minimum_dimensions.cyclic_dependencies"},
+		{"interface-compliance", "minimum_dimensions.interface_compliance"},
+		{"duck-typing", "minimum_dimensions.duck_typing"},
+		{"undocumented-exported-symbols", "minimum_documentation_percent"},
+		{"ignored-return-value", "maximum_ignored_return_values"},
+		{"panic-usage", "maximum_panics"},
+		{"high-git-churn", "maximum_git_churn"},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			report := Report{
+				Policy: &PolicyResult{Status: "FAIL", Checks: []PolicyCheck{{Name: tc.gate, Status: "FAIL"}}},
+				Files: []FileReport{
+					{Path: "a.go", Score: 1, Findings: []Finding{{Rule: "unrelated", Severity: "high"}}},
+					{Path: "b.go", Score: 9, Findings: []Finding{{Rule: tc.rule, Severity: "warning"}}},
+				},
+			}
+			if got := compactFindings(report); len(got) != 2 || got[0].path != "b.go" {
+				t.Fatalf("relevant evidence lost priority: %+v", got)
+			}
+		})
+	}
+}
+
+// testinvestigationfallback avoids redundant hints and selects the largest uncovered deficit
+func TestInvestigationFallback(t *testing.T) {
+	report := Report{
+		Policy: &PolicyResult{Status: "FAIL", Checks: []PolicyCheck{
+			{Name: "minimum_score", Status: "FAIL", Threshold: 9},
+			{Name: "minimum_dimensions.complexity", Status: "FAIL", Threshold: 9},
+			{Name: "minimum_dimensions.structure", Status: "FAIL", Threshold: 9},
+		}},
+		Files: []FileReport{
+			{Path: "hint.go", Score: 8, Dimensions: Dimensions{Complexity: ptr(8), Structure: ptr(7)}},
+			{Path: "measured.go", Score: 8, Dimensions: Dimensions{Complexity: ptr(8), Structure: ptr(7)}, Findings: []Finding{
+				{Rule: "deep-nesting", Severity: "warning"},
+			}},
+			{Path: "overall.go", Score: 8},
+			{Path: "healthy.go", Score: 10, Dimensions: Dimensions{Complexity: ptr(10), Structure: ptr(10)}},
+		},
+	}
+	got := compactFindings(report)
+	if len(got) != 3 || got[0].path != "measured.go" || got[0].synthetic ||
+		got[1].path != "hint.go" || !strings.Contains(got[1].finding.Message, "structure 7.0") ||
+		got[2].finding.Rule != "score-investigation" {
+		t.Fatalf("fallback hints obscured or duplicated measured evidence: %+v", got)
 	}
 }
 

@@ -63,18 +63,41 @@ project-threshold pass/fail verdict.
 ## Compact output
 
 `--format compact` returns project analysis status, overall score, classification,
-scoring version, file/exclusion counts, seven dimensions, optional selected
-score/dimensions, project-policy status, every configured comparison, all
-analysis warnings, and bounded findings. Without `--check` it explicitly says
-`NOT CHECKED`; an optional `--fail-under` verdict is labeled separately.
+scoring version, file/exclusion counts, project-policy status, a passed/total
+check count, every failed or unavailable comparison, and all analysis warnings.
+For routine passing `--check` runs, passing comparisons, project dimensions,
+and findings are omitted. `--verbose` restores the seven project dimensions,
+all configured comparisons, and bounded findings, including on passing runs.
+It is a presentation-only option: JSON/text output, analysis, policy evaluation,
+exit codes, and cache identity do not change.
+
+Failing, incomplete, unchecked, and selected views retain bounded findings.
+Selected views also retain selected scores/dimensions even when policy passes.
+Without `--check` output explicitly says `NOT CHECKED`; an optional
+`--fail-under` verdict is labeled separately. A failing CLI gate still displays
+findings even if project policy passes. Analysis warnings are never suppressed
+by the passing summary.
 
 `--max-findings N` defaults to 10; 0 hides detailed findings only. The count
-line reports shown/available entries. Every policy comparison and warning
-remains visible regardless of this limit. Candidates come from all analyzed
-files, not only the legacy under-8 hotspots. They include measured findings
-and file/dimension scores below project targets as investigation hints, not
-claims that project policy applies separately to files. They are ordered by
-file score, then path, then existing finding/check order.
+line reports shown/available entries when findings are displayed. Failed and
+unavailable comparisons and every warning remain visible regardless of this
+limit; full comparisons are available through `--verbose`, JSON, or text.
+
+Candidates come from all displayed files, not only the legacy under-8 hotspots.
+Measured findings always precede synthetic investigation hints. Within measured
+findings, evidence related to failed project dimensions comes first, then
+evidence for other failed gates, then unrelated findings. Within each group,
+ordering is severity (`high`, `warning`, `info`, unspecified), file score,
+path, line, rule, and message. Rule-to-gate relevance guides investigation;
+it does not assert exact causal attribution or apply project thresholds
+separately to files.
+
+Fallback hints are considered only for failed project score/dimension gates
+when the file has no measured rule explaining that metric. At most one hint
+is produced per file, selecting the largest uncovered dimension deficit or,
+otherwise, an overall-score deficit. Hints fill only budget remaining after
+measured findings; they are not generated just because a file is below a
+passing project's target.
 
 The limit affects compact output only; JSON/text retain their detailed forms.
 Existing unfiltered JSON/text scans without `--check` retain their contracts.

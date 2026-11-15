@@ -253,6 +253,7 @@ type RunConfig struct {
 	file            string
 	pkg             string
 	includeTestsSet bool
+	verbose         bool
 }
 
 // parseflags handles parse flags
@@ -271,6 +272,7 @@ func parseFlags() RunConfig {
 	hotspotsScope := flag.String("hotspots-scope", "file", "Hotspots scope: file or package")
 	check := flag.Bool("check", false, "Enforce all project policy thresholds")
 	maxFindings := flag.Int("max-findings", 10, "Maximum detailed findings in compact output (0 hides details)")
+	verbose := flag.Bool("verbose", false, "Show all dimensions, policy comparisons, and bounded findings in compact output")
 	file := flag.String("file", "", "Show one file relative to the complete project --path")
 	pkg := flag.String("package", "", "Show one package directory relative to the complete project --path")
 	flag.Parse()
@@ -304,6 +306,7 @@ func parseFlags() RunConfig {
 		file:            *file,
 		pkg:             *pkg,
 		includeTestsSet: includeTestsSet,
+		verbose:         *verbose,
 	}
 }
 

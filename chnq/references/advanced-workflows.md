@@ -6,12 +6,15 @@ From the repository root, use the bundled wrapper:
 # Recommended agent/CI gate: native policy evaluation and bounded details
 ./chnq/scripts/analyze.sh /path/to/project --check --format compact
 
+# All dimensions, comparisons, and findings even when policy passes
+./chnq/scripts/analyze.sh /path/to/project --check --format compact --verbose
+
 # Full project context, focused display; exact package excludes descendants
 ./chnq/scripts/analyze.sh /path/to/project --check --format compact --file internal/orders/service.go
 ./chnq/scripts/analyze.sh /path/to/project --check --format compact --package internal/orders
 
-# More detailed findings (default 10); zero hides details, never checks or warnings
-./chnq/scripts/analyze.sh /path/to/project --check --format compact --max-findings 20
+# More findings (default 10); zero never hides failures or warnings
+./chnq/scripts/analyze.sh /path/to/project --check --format compact --verbose --max-findings 20
 
 # Full JSON, legacy terminal output, or standalone overall gate
 ./chnq/scripts/analyze.sh /path/to/project --format json
@@ -39,6 +42,14 @@ Go 1.27.3 or automatic toolchain download with network access.
 explicit conflicting `--include-tests` value. Other scans retain legacy
 flag-based test/churn inclusion and optional `--fail-under` behavior.
 An additional `--fail-under` gate cannot weaken a project-policy gate.
+
+Passing unfiltered compact checks show only the summary, check count, and any
+warnings. Failures and unavailable checks are always shown. `--verbose`
+restores all comparisons, dimensions, and bounded findings. Failing, unchecked,
+incomplete, and selected views retain findings without requiring `--verbose`.
+Measured findings are prioritized by failed-gate relevance, then severity and
+deterministic tie-breaks; synthetic hints only fill remaining budget.
+The option changes compact presentation only, not JSON/text or scan/cache inputs.
 
 For `--check`, `--file`, and `--package`, `--path` must be a complete project
 directory, not a file or a directory inside an enclosing Go module. Use

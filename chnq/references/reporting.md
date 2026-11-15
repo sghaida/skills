@@ -6,6 +6,11 @@ A passing result does not require detailed metric explanations, status bars,
 or qualitative architecture reviews. Read the rest of this guide only when
 detailed reporting is requested or needed.
 
+Passing compact checks summarize the passed/total count instead of listing
+every passing threshold or finding. Use `--verbose` for all comparisons,
+dimensions, and bounded findings, or JSON/text for full reports. Failed and
+unavailable checks and analysis warnings always remain visible.
+
 When reporting a code change, distinguish implementation/test results from
 policy compliance. Disclose pre-existing failures separately from introduced
 regressions using baseline evidence; never infer that distinction from exit
