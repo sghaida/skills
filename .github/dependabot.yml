@@ -3,7 +3,7 @@ version: 2
 
 updates:
   - package-ecosystem: "gomod"
-    directory: "/"
+    directory: "/chnq"
     schedule:
       interval: "weekly"
       day: "monday"
